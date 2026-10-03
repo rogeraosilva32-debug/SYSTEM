@@ -8,7 +8,11 @@ PSQL="sudo -u postgres psql -X -q -v ON_ERROR_STOP=1"
 sudo -u postgres dropdb --if-exists "$DB" >/dev/null
 sudo -u postgres createdb "$DB"
 $PSQL -d "$DB" -f supabase/tests/00_stub_supabase.sql >/dev/null
-$PSQL -d "$DB" -f supabase-b2b-schema.sql >/dev/null 2>&1 || { echo "Erro aplicando o schema:"; $PSQL -d "$DB" -f supabase-b2b-schema.sql; exit 1; }
+$PSQL -d "$DB" -f supabase/tests/01_legado_producao.sql >/dev/null
+# Aplica duas vezes: o script precisa poder ser rodado de novo sem erro.
+for i in 1 2; do
+  $PSQL -d "$DB" -f supabase-b2b-schema.sql >/dev/null 2>&1 || { echo "Erro aplicando o schema (vez $i):"; $PSQL -d "$DB" -f supabase-b2b-schema.sql; exit 1; }
+done
 $PSQL -d "$DB" -f supabase/tests/10_seed.sql >/dev/null
 out=""
 for f in supabase/tests/2*.sql; do

@@ -42,7 +42,7 @@ export function LiveMapTab() {
     const [c, r] = await Promise.all([
       supabase.from("profiles").select("id, name, last_lat, last_lng, last_location_at")
         .eq("company_id", companyId).eq("company_role", "collaborator"),
-      supabase.from("delivery_runs").select("id, courier_id, status, started_at, orders(id, number, customer_name, address_street, address_number, address_neighborhood, lat, lng, status, stop_sequence)")
+      supabase.from("delivery_runs").select("id, courier_id, status, started_at, orders:delivery_orders(id, number, customer_name, address_street, address_number, address_neighborhood, lat, lng, status, stop_sequence)")
         .eq("company_id", companyId).eq("status", "in_progress"),
     ]);
     setCouriers(c.data || []);

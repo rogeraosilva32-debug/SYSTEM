@@ -80,7 +80,7 @@ export default function CourierDeliveries() {
 
   const load = useCallback(async () => {
     const [r, c] = await Promise.all([
-      supabase.from("delivery_runs").select("*, orders(*)").eq("courier_id", profile.id)
+      supabase.from("delivery_runs").select("*, orders:delivery_orders(*)").eq("courier_id", profile.id)
         .in("status", ["planned", "in_progress"]).order("created_at"),
       supabase.rpc("my_company_settings").maybeSingle(),
     ]);
@@ -94,7 +94,7 @@ export default function CourierDeliveries() {
   useEffect(() => {
     const channel = supabase.channel(`courier-${profile.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_runs", filter: `courier_id=eq.${profile.id}` }, () => load())
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `courier_id=eq.${profile.id}` }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "delivery_orders", filter: `courier_id=eq.${profile.id}` }, () => load())
       .subscribe();
     const interval = setInterval(load, 30000);
     return () => { clearInterval(interval); supabase.removeChannel(channel); };

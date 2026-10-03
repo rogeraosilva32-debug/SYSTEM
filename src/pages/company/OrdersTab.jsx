@@ -116,7 +116,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
       }
     }
 
-    const { data, error: insertError } = await supabase.from("orders").insert({
+    const { data, error: insertError } = await supabase.from("delivery_orders").insert({
       company_id: companyId, source, customer_id: custId, customer_name: name.trim(), customer_phone: digits,
       ...addressCols,
       items: items.trim() || null,
@@ -206,7 +206,7 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
     return true;
   };
 
-  const setStatus = (status) => run(() => supabase.from("orders").update({ status }).eq("id", order.id));
+  const setStatus = (status) => run(() => supabase.from("delivery_orders").update({ status }).eq("id", order.id));
   const inQueue = ["received", "preparing", "ready"].includes(order.status) && !order.run_id;
   const onRoute = ["on_route", "problem"].includes(order.status);
 
@@ -414,14 +414,14 @@ export function OrdersTab() {
   const load = useCallback(async () => {
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
     const [o, r, z, c, comp, d] = await Promise.all([
-      supabase.from("orders").select("*, courier:courier_id(name)").eq("company_id", companyId)
+      supabase.from("delivery_orders").select("*, courier:courier_id(name)").eq("company_id", companyId)
         .in("status", COLUMNS).order("created_at"),
       supabase.from("delivery_runs").select("*, courier:courier_id(name)").eq("company_id", companyId)
         .in("status", ["planned", "in_progress"]).order("created_at"),
       supabase.from("delivery_zones").select("*").eq("company_id", companyId).order("name"),
       supabase.from("profiles").select("id, name, last_lat, last_lng, last_location_at").eq("company_id", companyId).eq("company_role", "collaborator").order("name"),
       supabase.rpc("my_company_settings").maybeSingle(),
-      supabase.from("orders").select("id", { count: "exact", head: true }).eq("company_id", companyId)
+      supabase.from("delivery_orders").select("id", { count: "exact", head: true }).eq("company_id", companyId)
         .eq("status", "delivered").gte("delivered_at", startOfDay.toISOString()),
     ]);
     setOrders(o.data || []);
@@ -443,7 +443,7 @@ export function OrdersTab() {
       reloadTimer.current = setTimeout(load, 400);
     };
     const channel = supabase.channel(`orders-${companyId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `company_id=eq.${companyId}` }, schedule)
+      .on("postgres_changes", { event: "*", schema: "public", table: "delivery_orders", filter: `company_id=eq.${companyId}` }, schedule)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_runs", filter: `company_id=eq.${companyId}` }, schedule)
       .subscribe();
     const interval = setInterval(load, 30000);

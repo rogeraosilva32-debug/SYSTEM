@@ -1357,7 +1357,7 @@ create policy delivery_runs_read on public.delivery_runs
 -- Fila: received → preparing → ready → on_route → delivered
 --       (+ cancelled, problem)
 -- ---------------------------------------------------------------------
-create table if not exists public.orders (
+create table if not exists public.delivery_orders (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null references public.companies(id) on delete cascade,
   number integer,
@@ -1399,13 +1399,13 @@ create table if not exists public.orders (
   delivered_at timestamptz,
   unique (company_id, number)
 );
-create index if not exists orders_company_status_idx on public.orders(company_id, status, created_at desc);
-create index if not exists orders_run_idx on public.orders(run_id, stop_sequence);
-create index if not exists orders_courier_idx on public.orders(courier_id, status);
-alter table public.orders enable row level security;
+create index if not exists delivery_orders_company_status_idx on public.delivery_orders(company_id, status, created_at desc);
+create index if not exists delivery_orders_run_idx on public.delivery_orders(run_id, stop_sequence);
+create index if not exists delivery_orders_courier_idx on public.delivery_orders(courier_id, status);
+alter table public.delivery_orders enable row level security;
 
-drop policy if exists orders_managers on public.orders;
-create policy orders_managers on public.orders
+drop policy if exists delivery_orders_managers on public.delivery_orders;
+create policy delivery_orders_managers on public.delivery_orders
   for all using (
     (company_id = public.my_company_id() and public.is_order_manager())
     or public.is_platform_admin()
@@ -1417,12 +1417,12 @@ create policy orders_managers on public.orders
 
 -- Motoboy só lê os pedidos que estão com ele. Não escreve direto: tudo
 -- passa pelas funções start_run / complete_delivery / report_problem.
-drop policy if exists orders_courier_read on public.orders;
-create policy orders_courier_read on public.orders
+drop policy if exists delivery_orders_courier_read on public.delivery_orders;
+create policy delivery_orders_courier_read on public.delivery_orders
   for select using (courier_id = auth.uid());
 
 -- Número sequencial por empresa, bairro → zona e taxa automática.
-create or replace function public.orders_before_insert()
+create or replace function public.delivery_orders_before_insert()
 returns trigger language plpgsql security definer as $$
 declare
   v_zone record;
@@ -1446,7 +1446,7 @@ $$;
 
 -- Separado do gatilho acima porque precisa rodar SEM security definer:
 -- só assim is_client_call() enxerga que a chamada veio do app.
-create or replace function public.orders_sanitize_insert()
+create or replace function public.delivery_orders_sanitize_insert()
 returns trigger language plpgsql as $$
 begin
   -- Campos de entrega nunca vêm preenchidos do app na criação.
@@ -1461,9 +1461,9 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_orders_sanitize_insert on public.orders;
-create trigger trg_orders_sanitize_insert before insert on public.orders
-  for each row execute function public.orders_sanitize_insert();
+drop trigger if exists trg_delivery_orders_sanitize_insert on public.delivery_orders;
+create trigger trg_delivery_orders_sanitize_insert before insert on public.delivery_orders
+  for each row execute function public.delivery_orders_sanitize_insert();
 
 -- Remove acentos sem depender da extensão unaccent.
 create or replace function public.unaccent_simple(t text)
@@ -1473,14 +1473,14 @@ returns text language sql immutable as $$
     'aaaaaeeeeiiiiooooouuuucAAAAAEEEEIIIIOOOOOUUUUC')
 $$;
 
-drop trigger if exists trg_orders_before_insert on public.orders;
-create trigger trg_orders_before_insert before insert on public.orders
-  for each row execute function public.orders_before_insert();
+drop trigger if exists trg_delivery_orders_before_insert on public.delivery_orders;
+create trigger trg_delivery_orders_before_insert before insert on public.delivery_orders
+  for each row execute function public.delivery_orders_before_insert();
 
 -- Pelo app, gestor só move o pedido na fila (recebido/preparo/pronto) ou
 -- cancela. Saída, entrega e "forçar entrega" passam pelas funções, que
 -- registram quem fez e quando.
-create or replace function public.guard_orders()
+create or replace function public.guard_delivery_orders()
 returns trigger language plpgsql as $$
 begin
   if not public.is_client_call() or public.is_platform_admin() then
@@ -1512,15 +1512,15 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_guard_orders on public.orders;
-create trigger trg_guard_orders before update on public.orders
-  for each row execute function public.guard_orders();
+drop trigger if exists trg_guard_delivery_orders on public.delivery_orders;
+create trigger trg_guard_delivery_orders before update on public.delivery_orders
+  for each row execute function public.guard_delivery_orders();
 
 -- ---------------------------------------------------------------------
 -- Código de finalização (tabela separada: o motoboy não consegue ler)
 -- ---------------------------------------------------------------------
 create table if not exists public.order_delivery_codes (
-  order_id uuid primary key references public.orders(id) on delete cascade,
+  order_id uuid primary key references public.delivery_orders(id) on delete cascade,
   company_id uuid not null references public.companies(id) on delete cascade,
   code text not null,
   failed_attempts integer not null default 0,
@@ -1536,7 +1536,7 @@ create policy order_delivery_codes_managers on public.order_delivery_codes
     or public.is_platform_admin()
   );
 
-create or replace function public.orders_after_insert()
+create or replace function public.delivery_orders_after_insert()
 returns trigger language plpgsql security definer as $$
 begin
   insert into public.order_delivery_codes (order_id, company_id, code)
@@ -1546,16 +1546,16 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_orders_after_insert on public.orders;
-create trigger trg_orders_after_insert after insert on public.orders
-  for each row execute function public.orders_after_insert();
+drop trigger if exists trg_delivery_orders_after_insert on public.delivery_orders;
+create trigger trg_delivery_orders_after_insert after insert on public.delivery_orders
+  for each row execute function public.delivery_orders_after_insert();
 
 -- Liberar também o código: o admin precisa vê-lo para mandar ao cliente.
 -- (Desbloqueia a parada travada por tentativas erradas.)
 create or replace function public.unlock_delivery_code(p_order_id uuid)
 returns void language plpgsql security definer as $$
 begin
-  if not exists (select 1 from public.orders o where o.id = p_order_id
+  if not exists (select 1 from public.delivery_orders o where o.id = p_order_id
                  and o.company_id = public.my_company_id() and public.is_order_manager()) then
     raise exception 'Pedido não encontrado.';
   end if;
@@ -1603,7 +1603,7 @@ begin
   if coalesce(array_length(p_order_ids, 1), 0) = 0 then raise exception 'Escolha ao menos um pedido.'; end if;
   perform public.check_courier(p_courier);
 
-  if (select count(*) from public.orders o
+  if (select count(*) from public.delivery_orders o
       where o.id = any(p_order_ids) and o.company_id = v_company
         and o.status in ('received', 'preparing', 'ready') and o.run_id is null)
      <> array_length(p_order_ids, 1) then
@@ -1615,7 +1615,7 @@ begin
     values (v_company, p_courier, auth.uid(), v_strict) returning id into v_run;
 
   for i in 1 .. array_length(p_order_ids, 1) loop
-    update public.orders set run_id = v_run, courier_id = p_courier, stop_sequence = i
+    update public.delivery_orders set run_id = v_run, courier_id = p_courier, stop_sequence = i
       where id = p_order_ids[i];
   end loop;
 
@@ -1649,7 +1649,7 @@ begin
   end if;
 
   -- Tira da saída o que não está mais na lista (e não foi entregue).
-  update public.orders
+  update public.delivery_orders
     set run_id = null, courier_id = null, stop_sequence = null,
         status = case when status in ('on_route', 'problem') then 'ready' else status end,
         dispatched_at = null
@@ -1657,22 +1657,22 @@ begin
       and not (id = any(coalesce(p_order_ids, '{}')));
 
   -- Entregues ficam primeiro, na ordem em que foram entregues.
-  for v_id in select id from public.orders where run_id = p_run and status = 'delivered' order by delivered_at loop
+  for v_id in select id from public.delivery_orders where run_id = p_run and status = 'delivered' order by delivered_at loop
     v_seq := v_seq + 1;
-    update public.orders set stop_sequence = v_seq where id = v_id;
+    update public.delivery_orders set stop_sequence = v_seq where id = v_id;
   end loop;
 
   foreach v_id in array coalesce(p_order_ids, '{}') loop
-    if exists (select 1 from public.orders where id = v_id and status = 'delivered' and run_id = p_run) then
+    if exists (select 1 from public.delivery_orders where id = v_id and status = 'delivered' and run_id = p_run) then
       continue;
     end if;
-    if not exists (select 1 from public.orders where id = v_id and company_id = v_run.company_id
+    if not exists (select 1 from public.delivery_orders where id = v_id and company_id = v_run.company_id
                    and status in ('received', 'preparing', 'ready', 'on_route', 'problem')
                    and (run_id is null or run_id = p_run)) then
       raise exception 'Pedido indisponível para esta saída.';
     end if;
     v_seq := v_seq + 1;
-    update public.orders set run_id = p_run, courier_id = v_run.courier_id, stop_sequence = v_seq,
+    update public.delivery_orders set run_id = p_run, courier_id = v_run.courier_id, stop_sequence = v_seq,
       status = case when v_run.status = 'in_progress' then 'on_route' else status end,
       dispatched_at = case when v_run.status = 'in_progress' then coalesce(dispatched_at, now()) else dispatched_at end
       where id = v_id;
@@ -1691,7 +1691,7 @@ create or replace function public.maybe_finish_run(p_run uuid)
 returns void language plpgsql security definer as $$
 begin
   if exists (select 1 from public.delivery_runs where id = p_run and status = 'in_progress')
-     and not exists (select 1 from public.orders where run_id = p_run and status not in ('delivered', 'cancelled')) then
+     and not exists (select 1 from public.delivery_orders where run_id = p_run and status not in ('delivered', 'cancelled')) then
     update public.delivery_runs set status = 'finished', finished_at = now() where id = p_run;
   end if;
 end;
@@ -1707,7 +1707,7 @@ begin
   update public.delivery_runs set status = 'in_progress', started_at = now()
     where id = p_run and courier_id = auth.uid() and status = 'planned';
   if not found then raise exception 'Saída não encontrada ou já iniciada.'; end if;
-  update public.orders set status = 'on_route', dispatched_at = now()
+  update public.delivery_orders set status = 'on_route', dispatched_at = now()
     where run_id = p_run and status in ('received', 'preparing', 'ready');
 end;
 $$;
@@ -1718,11 +1718,11 @@ create or replace function public.choose_route(p_order_id uuid, p_choice smallin
 returns void language plpgsql security definer as $$
 declare v_strict boolean;
 begin
-  select r.strict_route into v_strict from public.orders o join public.delivery_runs r on r.id = o.run_id
+  select r.strict_route into v_strict from public.delivery_orders o join public.delivery_runs r on r.id = o.run_id
     where o.id = p_order_id and o.courier_id = auth.uid();
   if v_strict is null then raise exception 'Pedido não encontrado.'; end if;
   if v_strict and p_choice <> 0 then raise exception 'Esta empresa exige seguir a rota definida.'; end if;
-  update public.orders set route_choice = p_choice where id = p_order_id;
+  update public.delivery_orders set route_choice = p_choice where id = p_order_id;
 end;
 $$;
 grant execute on function public.choose_route(uuid, smallint) to authenticated;
@@ -1736,7 +1736,7 @@ declare
   v_code record;
 begin
   select o.*, c.feature_delivery_code into v_order
-    from public.orders o join public.companies c on c.id = o.company_id
+    from public.delivery_orders o join public.companies c on c.id = o.company_id
     where o.id = p_order_id and o.courier_id = auth.uid();
   if v_order.id is null then raise exception 'Pedido não encontrado.'; end if;
   if v_order.status <> 'on_route' then raise exception 'Este pedido não está em rota.'; end if;
@@ -1761,7 +1761,7 @@ begin
     end if;
   end if;
 
-  update public.orders set status = 'delivered', delivered_at = now(),
+  update public.delivery_orders set status = 'delivered', delivered_at = now(),
     delivered_lat = p_lat, delivered_lng = p_lng, delivered_by_code = v_needs_code
     where id = p_order_id;
   perform public.maybe_finish_run(v_order.run_id);
@@ -1775,7 +1775,7 @@ returns void language plpgsql security definer as $$
 declare v_order record;
 begin
   if coalesce(btrim(p_reason), '') = '' then raise exception 'Informe o motivo.'; end if;
-  update public.orders set status = 'problem', problem_reason = p_reason
+  update public.delivery_orders set status = 'problem', problem_reason = p_reason
     where id = p_order_id and courier_id = auth.uid() and status = 'on_route'
     returning * into v_order;
   if v_order.id is null then raise exception 'Pedido não encontrado ou não está em rota.'; end if;
@@ -1792,7 +1792,7 @@ declare v_order record;
 begin
   if not public.is_order_manager() then raise exception 'Sem permissão.'; end if;
   if coalesce(btrim(p_reason), '') = '' then raise exception 'O motivo é obrigatório.'; end if;
-  update public.orders set status = 'delivered', delivered_at = now(), delivered_by_code = false,
+  update public.delivery_orders set status = 'delivered', delivered_at = now(), delivered_by_code = false,
     forced_reason = p_reason
     where id = p_order_id and company_id = public.my_company_id() and status in ('on_route', 'problem')
     returning * into v_order;
@@ -1851,7 +1851,7 @@ revoke execute on function public.purge_location_pings(integer) from public, ano
 do $$
 declare t text;
 begin
-  foreach t in array array['orders', 'delivery_runs', 'location_pings'] loop
+  foreach t in array array['delivery_orders', 'delivery_runs', 'location_pings'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
@@ -1894,6 +1894,7 @@ drop policy if exists companies_self_read on public.companies;
 create policy companies_self_read on public.companies
   for select using (id = public.my_company_id() and public.my_company_role() = 'company_admin');
 
+drop function if exists public.my_company_settings();
 create or replace function public.my_company_settings()
 returns table(id uuid, name text, status text, feature_delivery_code boolean, feature_branding boolean,
               strict_route_mode boolean, off_route_meters integer)

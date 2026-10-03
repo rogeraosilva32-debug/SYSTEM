@@ -57,7 +57,7 @@ await admin.getByLabel('Valor dos itens').fill('50');
 await admin.screenshot({ path: `${SHOTS}/02-novo-pedido.png` });
 await admin.getByRole('button', { name: 'Criar pedido' }).click();
 await admin.getByText('Diego Alves').first().waitFor();
-log('novo pedido no banco:', sql(`select number||' '||status||' taxa='||delivery_fee||' total='||total||' lat='||coalesce(lat::text,'-') from orders where customer_name='Diego Alves'`));
+log('novo pedido no banco:', sql(`select number||' '||status||' taxa='||delivery_fee||' total='||total||' lat='||coalesce(lat::text,'-') from delivery_orders where customer_name='Diego Alves'`));
 log('cliente salvo:', sql(`select count(*) from customers where phone='11977778888'`));
 
 // selecionar #1 e #2 e despachar
@@ -73,14 +73,14 @@ await admin.screenshot({ path: `${SHOTS}/03-despacho.png` });
 await admin.getByRole('button', { name: /^Despachar$/ }).click();
 await admin.getByText('SAÍDAS EM ANDAMENTO').waitFor();
 await admin.waitForTimeout(800);
-log('saída:', sql(`select string_agg('#'||number||'→parada '||stop_sequence, ', ' order by stop_sequence) from orders where run_id is not null`));
+log('saída:', sql(`select string_agg('#'||number||'→parada '||stop_sequence, ', ' order by stop_sequence) from delivery_orders where run_id is not null`));
 await admin.screenshot({ path: `${SHOTS}/04-saida.png` });
 
 // detalhe do pedido 1: código + whatsapp
 await admin.locator('text=Ana Souza').first().click();
 await admin.getByText('CÓDIGO DE ENTREGA').waitFor();
 const codeShown = await admin.locator('text=/^\\d{4}$/').first().innerText();
-log('código mostrado ao admin:', codeShown, '(banco:', sql(`select code from order_delivery_codes c join orders o on o.id=c.order_id where o.number=1`) + ')');
+log('código mostrado ao admin:', codeShown, '(banco:', sql(`select code from order_delivery_codes c join delivery_orders o on o.id=c.order_id where o.number=1`) + ')');
 await admin.getByRole('button', { name: /Enviar por WhatsApp/ }).click();
 log('link WhatsApp:', decodeURIComponent(await admin.evaluate(() => window.__opened)));
 await admin.screenshot({ path: `${SHOTS}/05-detalhe-codigo.png` });
@@ -102,8 +102,8 @@ await courier.getByText('Principal (mais rápida)').waitFor();
 await courier.screenshot({ path: `${SHOTS}/07-motoboy-rotas.png`, fullPage: true });
 await courier.getByText('Alternativa 1').click();
 await courier.waitForTimeout(500);
-const firstStop = sql(`select number from orders where stop_sequence=1 and run_id is not null`);
-log('rota escolhida no banco (pedido #' + firstStop + '):', sql(`select route_choice from orders where number=${firstStop}`));
+const firstStop = sql(`select number from delivery_orders where stop_sequence=1 and run_id is not null`);
+log('rota escolhida no banco (pedido #' + firstStop + '):', sql(`select route_choice from delivery_orders where number=${firstStop}`));
 await courier.getByRole('button', { name: /Google Maps/ }).click();
 log('Google Maps:', decodeURIComponent(await courier.evaluate(() => window.__opened)));
 await courier.getByRole('button', { name: /^Waze$/ }).click();
@@ -113,12 +113,12 @@ await courier.getByLabel(/Código de entrega/).fill('0000');
 await courier.getByRole('button', { name: 'Finalizar entrega' }).click();
 await courier.getByText(/Código incorreto/).waitFor();
 log('código errado: recusado');
-const right = sql(`select code from order_delivery_codes c join orders o on o.id=c.order_id where o.number=${firstStop}`);
+const right = sql(`select code from order_delivery_codes c join delivery_orders o on o.id=c.order_id where o.number=${firstStop}`);
 await courier.getByLabel(/Código de entrega/).fill(right);
 await courier.getByRole('button', { name: 'Finalizar entrega' }).click();
 await courier.getByText('Entrega finalizada!').waitFor();
 await courier.getByText('Parada 2 de 2').waitFor();
-log('após código certo:', sql(`select '#'||number||' '||status||' por_codigo='||delivered_by_code from orders where number=${firstStop}`));
+log('após código certo:', sql(`select '#'||number||' '||status||' por_codigo='||delivered_by_code from delivery_orders where number=${firstStop}`));
 await courier.screenshot({ path: `${SHOTS}/08-motoboy-parada2.png`, fullPage: true });
 
 // desvio: move o GPS para longe da rota
