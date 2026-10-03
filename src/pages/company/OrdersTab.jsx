@@ -11,12 +11,13 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import TwoWheelerIcon from "@mui/icons-material/TwoWheeler";
 import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
-import AddressPicker from "../../components/AddressPicker";
+import DeliveryAddressField from "../../components/DeliveryAddressField";
+import { useCompanySettings } from "../../hooks/useCompanySettings";
+import { locateAddress } from "../../utils/geocoding";
 import InfoField from "../../components/InfoField";
 import RouteMap from "../../components/RouteMap";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
-import { forwardGeocode } from "../../utils/geocoding";
 import {
   ORDER_STATUS, PAYMENT_LABEL, SOURCE_LABEL, money, orderAddress, whatsappUrl,
   deliveryCodeMessage, groupByNeighborhood, suggestStopOrder,
@@ -37,9 +38,13 @@ function StatusChip({ status }) {
 }
 
 // ───────────────────────── Novo pedido ─────────────────────────
-const EMPTY_ADDRESS = { street: "", number: "", neighborhood: "", city: "", lat: null, lng: null };
+const EMPTY_ADDRESS = { street: "", number: "", neighborhood: "", city: "", state: "", lat: null, lng: null, precision: null };
 
 function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
+  const settings = useCompanySettings();
+  const store = settings?.store_lat ? {
+    lat: settings.store_lat, lng: settings.store_lng, city: settings.store_city, state: settings.store_state,
+  } : null;
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
   const [customerId, setCustomerId] = useState(null);
@@ -80,7 +85,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
       setAddress({
         street: data.address_street || "", number: data.address_number || "",
         neighborhood: data.address_neighborhood || "", city: data.address_city || "",
-        lat: data.lat, lng: data.lng,
+        lat: data.lat, lng: data.lng, precision: data.lat ? "number" : null,
       });
       setFound("Cliente encontrado: endereço preenchido.");
     } else {
@@ -92,17 +97,27 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
     setError("");
     if (!name.trim()) { setError("Informe o nome do cliente."); return; }
     setSaving(true);
-
-    let { lat, lng } = address;
-    if ((!lat || !lng) && (address.street || address.neighborhood)) {
-      const coords = await forwardGeocode(address);
-      if (coords) { lat = coords.lat; lng = coords.lng; }
+    // Sem ponto no mapa o motoboy fica sem rota: tenta localizar agora o que
+    // foi digitado e, se não achar, pede para marcar no mapa.
+    let addr = address;
+    if ((!addr.lat || !addr.lng) && (addr.street || addr.neighborhood)) {
+      const r = await locateAddress({ ...addr, city: addr.city || store?.city, state: addr.state || store?.state }, store).catch(() => null);
+      if (r) {
+        addr = { ...addr, neighborhood: addr.neighborhood || r.neighborhood, city: addr.city || r.city, lat: r.lat, lng: r.lng, precision: r.precision };
+        setAddress(addr);
+      }
+    }
+    const { lat, lng } = addr;
+    if (!lat || !lng) {
+      setSaving(false);
+      setError("Não achei esse endereço no mapa. Confira o endereço, use a busca ou clique no mapa no ponto da entrega.");
+      return;
     }
     const digits = phone.replace(/\D/g, "") || null;
     const addressCols = {
-      address_street: address.street || null, address_number: address.number || null,
-      address_complement: complement || null, address_neighborhood: address.neighborhood || null,
-      address_city: address.city || null, lat: lat || null, lng: lng || null,
+      address_street: addr.street || null, address_number: addr.number || null,
+      address_complement: complement || null, address_neighborhood: addr.neighborhood || null,
+      address_city: addr.city || store?.city || null, lat: lat || null, lng: lng || null,
     };
 
     let custId = customerId;
@@ -144,7 +159,10 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
           <TextField label="Nome do cliente" size="small" value={name} onChange={(e) => setName(e.target.value)} />
         </Box>
         {found && <Typography sx={{ fontSize: 11.5, color: "#4B7A5E", fontWeight: 600 }}>{found}</Typography>}
-        <AddressPicker value={address} onChange={setAddress} showNumber gpsLabel="Usar a localização deste aparelho" />
+        {!store && (
+          <Alert severity="info" sx={{ py: 0 }}>Cadastre o endereço da loja em "Entregas: ajustes" para as buscas priorizarem a sua cidade e as rotas saírem da loja.</Alert>
+        )}
+        <DeliveryAddressField value={address} onChange={setAddress} store={store} />
         <TextField label="Complemento / referência" size="small" value={complement} onChange={(e) => setComplement(e.target.value)} />
         <TextField label="Itens do pedido" size="small" multiline minRows={2} value={items} onChange={(e) => setItems(e.target.value)} />
         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1.2 }}>
@@ -257,6 +275,7 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
 
         {order.lat && order.lng && (
           <RouteMap lat={order.lat} lng={order.lng} address={orderAddress(order)}
+            origin={company?.store_lat ? { lat: company.store_lat, lng: company.store_lng } : null}
             trackCollaboratorId={onRoute ? order.courier_id : null} mapHeight={220} />
         )}
 
@@ -320,6 +339,8 @@ function StopList({ stops, setStops }) {
 }
 
 function RunDialog({ open, onClose, onDone, couriers, available, run }) {
+  const settings = useCompanySettings();
+  const storePoint = settings?.store_lat ? { lat: settings.store_lat, lng: settings.store_lng } : null;
   // `run` = saída existente (editar) ou null (nova saída com os `available` selecionados).
   const [courierId, setCourierId] = useState("");
   const [stops, setStops] = useState([]);
@@ -332,8 +353,9 @@ function RunDialog({ open, onClose, onDone, couriers, available, run }) {
     /* eslint-disable react-hooks/set-state-in-effect */
     setError(""); setAddId("");
     if (run) { setCourierId(run.courier_id); setStops(run.orders); }
-    else { setCourierId(""); setStops(suggestStopOrder(available.filter((o) => o._selected))); }
+    else { setCourierId(""); setStops(suggestStopOrder(available.filter((o) => o._selected), storePoint)); }
     /* eslint-enable react-hooks/set-state-in-effect */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, run, available]);
 
   const courier = couriers.find((c) => c.id === courierId);
@@ -342,7 +364,8 @@ function RunDialog({ open, onClose, onDone, couriers, available, run }) {
 
   const suggest = () => {
     const done = stops.filter((s) => s.status === "delivered");
-    const start = courier?.last_lat ? { lat: courier.last_lat, lng: courier.last_lng } : null;
+    // A saída começa na loja; sem loja cadastrada, onde o motoboy está.
+    const start = storePoint || (courier?.last_lat ? { lat: courier.last_lat, lng: courier.last_lng } : null);
     setStops([...done, ...suggestStopOrder(stops.filter((s) => s.status !== "delivered"), start)]);
   };
 

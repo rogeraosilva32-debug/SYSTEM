@@ -18,6 +18,7 @@ import {
   ORDER_STATUS, PAYMENT_LABEL, money, orderAddress, googleMapsUrl, wazeUrl, fetchRouteOptions,
   distanceToPath, ROUTE_COLORS, ROUTE_NAMES, GOOGLE_MAX_WAYPOINTS,
 } from "../utils/delivery";
+import { fetchMultiStopRoute } from "../utils/geocoding";
 
 const PING_INTERVAL_MS = 15000;
 const PROBLEMS = ["Cliente não atende", "Endereço não encontrado", "Cliente recusou o pedido", "Pedido danificado", "Outro"];
@@ -27,6 +28,51 @@ const meIcon = new L.DivIcon({
   html: `<div style="width:16px;height:16px;border-radius:50%;background:#4F5BA6;border:3px solid #fff;box-shadow:0 0 8px rgba(79,91,166,.6);transform:translate(-8px,-8px)"></div>`,
   iconSize: [0, 0],
 });
+const storeIcon = new L.DivIcon({
+  className: "",
+  html: `<div style="transform:translate(-11px,-11px);width:22px;height:22px;border-radius:6px;background:#1C1917;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
+  iconSize: [0, 0],
+});
+const numberIcon = (n) => new L.DivIcon({
+  className: "",
+  html: `<div style="width:22px;height:22px;border-radius:50%;background:#B0463D;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;transform:translate(-11px,-11px);border:2px solid #fff">${n}</div>`,
+  iconSize: [0, 0],
+});
+
+// Mapa da saída inteira (loja → paradas na ordem), antes de iniciar.
+function RunOverview({ store, orders }) {
+  const [route, setRoute] = useState(null);
+  const stops = orders.filter((o) => o.lat && o.lng);
+  const key = [store?.lat, store?.lng, ...stops.map((o) => o.id)].join("|");
+  useEffect(() => {
+    let alive = true;
+    fetchMultiStopRoute([store, ...stops]).then((r) => { if (alive) setRoute(r); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  if (!stops.length) return null;
+  const points = [...(store ? [[store.lat, store.lng]] : []), ...stops.map((o) => [o.lat, o.lng])];
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      <Box sx={{ height: 260, borderRadius: "14px", overflow: "hidden", border: "1px solid #E7E5E4" }}>
+        <MapContainer center={points[0]} zoom={13} style={{ height: "100%", width: "100%" }}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" />
+          <FitBounds points={route?.path?.length ? [points[0], ...points.slice(1), route.path[Math.floor(route.path.length / 2)]] : points} />
+          {route && <Polyline positions={route.path} pathOptions={{ color: "#1C1917", weight: 5, opacity: 0.85 }} />}
+          {store && <Marker position={[store.lat, store.lng]} icon={storeIcon} />}
+          {stops.map((o) => <Marker key={o.id} position={[o.lat, o.lng]} icon={numberIcon(o.stop_sequence)} />)}
+        </MapContainer>
+      </Box>
+      {route && (
+        <Typography sx={{ fontSize: 12.5, color: "#57534E", mt: 0.6, fontWeight: 600 }}>
+          Trajeto {store ? "da loja " : ""}por {stops.length} parada(s): {(route.distanceMeters / 1000).toFixed(1)} km · cerca de {Math.round(route.durationSeconds / 60)} min
+        </Typography>
+      )}
+      {!store && <Typography sx={{ fontSize: 11.5, color: "#A8A29E", mt: 0.4 }}>A empresa ainda não cadastrou o endereço da loja; o trajeto começa na 1ª parada.</Typography>}
+    </Box>
+  );
+}
+
 const destIcon = new L.DivIcon({
   className: "",
   html: `<div style="width:18px;height:18px;border-radius:50%;background:#1C1917;border:3px solid #fff;box-shadow:0 0 0 2px #1C1917;transform:translate(-9px,-9px)"></div>`,
@@ -133,6 +179,13 @@ export default function CourierDeliveries() {
   const currentStop = activeRun?.orders.find((o) => o.status === "on_route") || null;
   const remainingStops = activeRun?.orders.filter((o) => o.status === "on_route") || [];
   useWakeLock(Boolean(activeRun));
+  const store = company?.store_lat ? { lat: company.store_lat, lng: company.store_lng } : null;
+  // De onde sai o trecho atual: a parada anterior (ou a loja, na 1ª). Se o
+  // motoboy pedir para recalcular, sai de onde ele está.
+  const prevStop = currentStop
+    ? [...(activeRun?.orders || [])].filter((o) => o.stop_sequence < currentStop.stop_sequence && o.lat && o.lng).pop() || null
+    : null;
+  const [legOrigin, setLegOrigin] = useState(null);
 
   // ── GPS ────────────────────────────────────────────────────────────────
   const gpsOn = Boolean(runs?.length || shift);
@@ -172,15 +225,19 @@ export default function CourierDeliveries() {
   // desvio; fora do modo rota exata, o motoboy pode recalcular pelo botão.
   const [recalc, setRecalc] = useState(0);
   useEffect(() => {
-    if (!currentStop?.lat || !myPos) return;
+    if (!currentStop?.lat) return;
+    const origin = recalc > 0 && myPos ? myPos : (prevStop || store || myPos);
+    if (!origin) return;
     const key = `${currentStop.id}:${recalc}`;
     if (routeFrom.current?.key === key) return;
     routeFrom.current = { key };
-    fetchRouteOptions(myPos, currentStop).then((opts) => {
+    fetchRouteOptions(origin, currentStop).then((opts) => {
+      setLegOrigin(origin);
       setOptions(opts);
       setChoice(strict ? 0 : Math.min(currentStop.route_choice ?? 0, Math.max(opts.length - 1, 0)));
     });
-  }, [currentStop, myPos, strict, recalc]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStop, myPos, strict, recalc, prevStop?.id, store?.lat, store?.lng]);
 
   // ── Desvio de rota ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -232,6 +289,7 @@ export default function CourierDeliveries() {
 
   const mapPoints = [];
   if (myPos) mapPoints.push([myPos.lat, myPos.lng]);
+  if (legOrigin) mapPoints.push([legOrigin.lat, legOrigin.lng]);
   if (currentStop?.lat) mapPoints.push([currentStop.lat, currentStop.lng]);
 
   if (runs === null) return <AppShell title="Minhas entregas"><CollaboratorNav /><Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box></AppShell>;
@@ -250,6 +308,7 @@ export default function CourierDeliveries() {
       {plannedRun && (
         <Box>
           <Typography sx={{ fontWeight: 800, fontSize: 17, mb: 1 }}>Nova saída: {plannedRun.orders.length} parada(s)</Typography>
+          <RunOverview store={store} orders={plannedRun.orders} />
           {plannedRun.orders.map((o) => (
             <Box key={o.id} sx={{ p: 1.5, mb: 1, border: "1px solid #E7E5E4", borderRadius: "12px", background: "#fff" }}>
               <Typography sx={{ fontWeight: 700, fontSize: 14 }}>{o.stop_sequence}. #{o.number} · {o.customer_name}</Typography>
@@ -304,6 +363,7 @@ export default function CourierDeliveries() {
                   <Polyline positions={options[choice].path} pathOptions={{ color: offRoute ? "#B0463D" : ROUTE_COLORS[choice], weight: 6, opacity: 0.9 }} />
                 )}
                 <Marker position={[currentStop.lat, currentStop.lng]} icon={destIcon} />
+                {store && <Marker position={[store.lat, store.lng]} icon={storeIcon} />}
                 {myPos && <Marker position={[myPos.lat, myPos.lng]} icon={meIcon} />}
               </MapContainer>
             </Box>

@@ -534,3 +534,12 @@ Para suspender inadimplentes sozinho todo dia, agende no Supabase (Database → 
 `select public.apply_overdue_suspensions();`
 
 Teste no navegador: `node supabase/tests/e2e/fluxo-financeiro.mjs` (depois do `setup.sh`).
+
+## 28. Endereço da loja e rotas
+
+- **Entregas: ajustes → Endereço da loja:** ponto de partida das rotas; a busca de endereço dos pedidos dá preferência para a cidade e a região da loja.
+- **Novo pedido:** o endereço é digitado (busca com sugestões ou campos), localizado no mapa automaticamente; dá para clicar no mapa ou arrastar o marcador. Pedido sem ponto no mapa não é criado.
+- **Motoboy:** a saída mostra o trajeto completo (loja → paradas); cada trecho sai da parada anterior (ou da loja), então a rota aparece mesmo sem GPS. "Recalcular a partir daqui" usa a posição atual.
+- **Mapa ao vivo e detalhe do pedido:** trajeto previsto a partir da loja.
+
+Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.

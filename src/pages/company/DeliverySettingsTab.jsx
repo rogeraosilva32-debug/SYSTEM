@@ -6,6 +6,38 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { money } from "../../utils/delivery";
+import DeliveryAddressField from "../../components/DeliveryAddressField";
+import { refreshCompanySettings } from "../../hooks/useCompanySettings";
+
+// Endereço da loja: ponto de partida das rotas e referência das buscas.
+function StoreAddress({ company, onSaved }) {
+  const [addr, setAddr] = useState({
+    street: company.store_street || "", number: company.store_number || "", neighborhood: company.store_neighborhood || "",
+    city: company.store_city || "", state: company.store_state || "", lat: company.store_lat, lng: company.store_lng,
+    precision: company.store_lat ? "number" : null,
+  });
+  const [msg, setMsg] = useState(null);
+  const save = async () => {
+    if (!addr.lat || !addr.lng) { setMsg({ type: "error", text: "Localize o endereço da loja no mapa antes de salvar." }); return; }
+    if (!addr.city) { setMsg({ type: "error", text: "Informe a cidade da loja." }); return; }
+    const { error } = await supabase.from("companies").update({
+      store_street: addr.street || null, store_number: addr.number || null, store_neighborhood: addr.neighborhood || null,
+      store_city: addr.city || null, store_state: addr.state || null, store_lat: addr.lat, store_lng: addr.lng,
+    }).eq("id", company.id);
+    setMsg(error ? { type: "error", text: error.message } : { type: "success", text: "Endereço da loja salvo." });
+    if (!error) { refreshCompanySettings(); onSaved(); }
+  };
+  return (
+    <Box>
+      <Typography sx={{ fontSize: 12.5, color: "#78716C", mb: 1.5 }}>
+        As rotas dos motoboys saem daqui, e a busca de endereço dos pedidos dá preferência para esta cidade.
+      </Typography>
+      {msg && <Alert severity={msg.type} sx={{ mb: 1.5 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
+      <DeliveryAddressField value={addr} onChange={setAddr} store={null} mapHeight={220} />
+      <Button variant="contained" sx={{ mt: 1.5 }} onClick={save}>Salvar endereço da loja</Button>
+    </Box>
+  );
+}
 
 function Section({ title, children }) {
   return (
@@ -76,6 +108,10 @@ export function DeliverySettingsTab() {
     <Box sx={{ maxWidth: 760 }}>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {saved && <Alert severity="success" sx={{ mb: 2 }}>{saved}</Alert>}
+
+      <Section title="Endereço da loja (ponto de partida)">
+        <StoreAddress key={company.id} company={company} onSaved={load} />
+      </Section>
 
       <Section title="Rotas">
         <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2 }}>

@@ -13,6 +13,13 @@ const destIcon = new L.DivIcon({
   iconAnchor: [8, 8],
 });
 
+const storeIcon = new L.DivIcon({
+  className: "",
+  html: `<div style="width:20px;height:20px;border-radius:6px;background:#1C1917;color:#fff;font:700 11px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
+});
+
 const meIcon = new L.DivIcon({
   className: "",
   html: `<div style="width:14px;height:14px;border-radius:50%;background:#4A6C8C;border:3px solid #fff;box-shadow:0 0 8px rgba(74,108,140,0.5);"></div>`,
@@ -109,6 +116,7 @@ export default function RouteMap({
   trackCollaboratorId = null,
   assignmentId = null,
   mapHeight = 340,
+  origin = null, // {lat, lng} fixo (ex.: a loja) quando não há posição de ninguém
 }) {
   const [myPos, setMyPos] = useState(null);
   const [geoError, setGeoError] = useState("");
@@ -215,10 +223,11 @@ export default function RouteMap({
   }, [trackCollaboratorId]);
 
   const otherPos = myPos || trackedPos;
+  const fromPos = otherPos || (origin?.lat ? origin : null);
 
   // ── Rota de verdade entre a posição de alguém e o destino ─────────────────
   useEffect(() => {
-    if (!otherPos || !lat || !lng) {
+    if (!fromPos || !lat || !lng) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setRoute(null);
       return;
@@ -227,13 +236,14 @@ export default function RouteMap({
     // Só recalcula se ninguém pediu rota ainda, ou se a posição mudou mais
     // de ~40m — evita bombardear o serviço de rotas a cada atualização de GPS.
     const last = lastRouteFetchPos.current;
-    if (last && distanceMeters(last, otherPos) < 40) return;
+    if (last && distanceMeters(last, fromPos) < 40) return;
 
-    lastRouteFetchPos.current = otherPos;
-    fetchRoute(otherPos.lat, otherPos.lng, lat, lng).then((result) => {
+    lastRouteFetchPos.current = fromPos;
+    fetchRoute(fromPos.lat, fromPos.lng, lat, lng).then((result) => {
       if (result) setRoute(result);
     });
-  }, [otherPos, lat, lng]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromPos?.lat, fromPos?.lng, lat, lng]);
 
   // ── Detecção de desvio de rota ────────────────────────────────────────────
   useEffect(() => {
@@ -281,6 +291,12 @@ export default function RouteMap({
           <Marker position={[lat, lng]} icon={destIcon}>
             <Popup>{address || "Destino"}</Popup>
           </Marker>
+          {!otherPos && fromPos && (
+            <>
+              <Marker position={[fromPos.lat, fromPos.lng]} icon={storeIcon}><Popup>Loja</Popup></Marker>
+              {route && <Polyline positions={route.path} pathOptions={{ color: "#292524", weight: 4, opacity: 0.85 }} />}
+            </>
+          )}
           {otherPos && (
             <>
               <Marker position={[otherPos.lat, otherPos.lng]} icon={meIcon}>

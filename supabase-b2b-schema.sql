@@ -2611,3 +2611,34 @@ begin
 end;
 $$;
 grant execute on function public.report_license_usage() to authenticated;
+
+-- =====================================================================
+-- ENDEREÇO DA LOJA — ponto de partida das rotas e referência para achar
+-- os endereços digitados nos pedidos (o admin da empresa cadastra).
+-- =====================================================================
+alter table public.companies add column if not exists store_street text;
+alter table public.companies add column if not exists store_number text;
+alter table public.companies add column if not exists store_neighborhood text;
+alter table public.companies add column if not exists store_city text;
+alter table public.companies add column if not exists store_state text;
+alter table public.companies add column if not exists store_lat double precision;
+alter table public.companies add column if not exists store_lng double precision;
+
+drop function if exists public.my_company_settings();
+create or replace function public.my_company_settings()
+returns table(id uuid, name text, status text, feature_delivery_code boolean, feature_branding boolean,
+              strict_route_mode boolean, off_route_meters integer,
+              brand_color text, brand_logo_url text, brand_icon_url text, brand_login_bg_url text, brand_share_url text,
+              store_street text, store_number text, store_neighborhood text, store_city text, store_state text,
+              store_lat double precision, store_lng double precision)
+language sql stable security definer as $$
+  select c.id, c.name, c.status, c.feature_delivery_code, c.feature_branding, c.strict_route_mode, c.off_route_meters,
+         case when c.feature_branding then c.brand_color end,
+         case when c.feature_branding then c.brand_logo_url end,
+         case when c.feature_branding then c.brand_icon_url end,
+         case when c.feature_branding then c.brand_login_bg_url end,
+         case when c.feature_branding then c.brand_share_url end,
+         c.store_street, c.store_number, c.store_neighborhood, c.store_city, c.store_state, c.store_lat, c.store_lng
+  from public.companies c where c.id = public.my_company_id()
+$$;
+grant execute on function public.my_company_settings() to authenticated;

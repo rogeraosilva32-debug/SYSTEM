@@ -5,6 +5,15 @@ import L from "leaflet";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { orderAddress } from "../../utils/delivery";
+import { fetchMultiStopRoute } from "../../utils/geocoding";
+import { useCompanySettings } from "../../hooks/useCompanySettings";
+
+const storeIcon = new L.DivIcon({
+  className: "",
+  html: `<div style="transform:translate(-11px,-11px);width:22px;height:22px;border-radius:6px;background:#1C1917;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
+  iconSize: [0, 0],
+});
+const PLAN_COLORS = ["#B0793D", "#4A6C8C", "#4B7A5E", "#8C4A7A", "#B0463D"];
 
 const courierIcon = (label, active) => new L.DivIcon({
   className: "",
@@ -36,6 +45,9 @@ export function LiveMapTab() {
   const [couriers, setCouriers] = useState(null);
   const [runs, setRuns] = useState([]);
   const [trails, setTrails] = useState({});
+  const [plans, setPlans] = useState({});
+  const settings = useCompanySettings();
+  const store = settings?.store_lat ? { lat: settings.store_lat, lng: settings.store_lng } : null;
   const timer = useRef(null);
 
   const load = useCallback(async () => {
@@ -72,21 +84,45 @@ export function LiveMapTab() {
     return () => { clearTimeout(timer.current); clearInterval(interval); supabase.removeChannel(channel); };
   }, [companyId, load]);
 
+  // Trajeto previsto de cada saída: loja (ou última parada feita) → paradas restantes.
+  const planKey = runs.map((r) => `${r.id}:${(r.orders || []).filter((o) => o.status === "on_route").map((o) => o.id).join(",")}`).join("|");
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const next = {};
+      for (const r of runs) {
+        const sorted = [...(r.orders || [])].sort((a, b) => a.stop_sequence - b.stop_sequence);
+        const pending = sorted.filter((o) => o.status === "on_route" && o.lat && o.lng);
+        if (!pending.length) continue;
+        const done = sorted.filter((o) => o.status !== "on_route" && o.lat && o.lng && o.stop_sequence < pending[0].stop_sequence).pop();
+        const route = await fetchMultiStopRoute([done || store, ...pending].filter(Boolean));
+        if (route) next[r.id] = route.path;
+      }
+      if (alive) setPlans(next);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planKey, store?.lat, store?.lng]);
+
   if (couriers === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
 
   const located = couriers.filter((c) => c.last_lat && c.last_lng);
   const allStops = runs.flatMap((r) => (r.orders || []).filter((o) => o.lat && o.lng));
-  const center = located[0] ? [located[0].last_lat, located[0].last_lng]
+  const center = store ? [store.lat, store.lng] : located[0] ? [located[0].last_lat, located[0].last_lng]
     : allStops[0] ? [allStops[0].lat, allStops[0].lng] : [-15.78, -47.93];
   const activeCourierIds = new Set(runs.map((r) => r.courier_id));
 
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 280px" }, gap: 2 }}>
       <Box sx={{ height: { xs: 420, md: 600 }, borderRadius: "14px", overflow: "hidden", border: "1px solid #E7E5E4" }}>
-        <MapContainer center={center} zoom={located.length || allStops.length ? 13 : 4} style={{ height: "100%", width: "100%" }}>
+        <MapContainer center={center} zoom={store || located.length || allStops.length ? 13 : 4} style={{ height: "100%", width: "100%" }}>
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" />
+          {runs.map((r, i) => plans[r.id] && (
+            <Polyline key={`plan-${r.id}`} positions={plans[r.id]} pathOptions={{ color: PLAN_COLORS[i % PLAN_COLORS.length], weight: 5, opacity: 0.75 }} />
+          ))}
+          {store && <Marker position={[store.lat, store.lng]} icon={storeIcon}><Popup>Loja</Popup></Marker>}
           {Object.entries(trails).map(([runId, path]) => (
-            <Polyline key={runId} positions={path} pathOptions={{ color: "#4F5BA6", weight: 3, opacity: 0.6 }} />
+            <Polyline key={runId} positions={path} pathOptions={{ color: "#4F5BA6", weight: 3, opacity: 0.6, dashArray: "4 6" }} />
           ))}
           {runs.flatMap((r) => (r.orders || []).filter((o) => o.lat && o.lng && o.status === "on_route").map((o) => (
             <Marker key={o.id} position={[o.lat, o.lng]} icon={stopIcon(o.stop_sequence)}>
@@ -116,7 +152,8 @@ export function LiveMapTab() {
           );
         })}
         <Typography sx={{ fontSize: 11, color: "#A8A29E", mt: 1 }}>
-          A posição é enviada pelo celular do motoboy enquanto a saída está em andamento e o app está aberto.
+          Linha colorida: trajeto previsto até as próximas paradas. Tracejado azul: caminho já percorrido.
+          A posição é enviada pelo celular do motoboy durante o turno e a saída, com o app aberto.
         </Typography>
       </Box>
     </Box>
