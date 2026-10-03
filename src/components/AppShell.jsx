@@ -59,7 +59,7 @@ export default function AppShell({ title, actions, children }) {
 
   return (
     <Box sx={{ minHeight: "100vh", background: "#FAFAF9" }}>
-      <Box sx={{
+      <Box className="no-print" sx={{
         position: "sticky", top: 0, zIndex: 10,
         background: "rgba(250,250,249,0.9)", backdropFilter: "blur(10px)",
         borderBottom: "1px solid #E7E5E4",

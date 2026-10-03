@@ -60,6 +60,30 @@ function useWakeLock(active) {
   }, [active]);
 }
 
+// Turno do motoboy: cada dia com turno conta uma diária no acerto.
+function ShiftBar({ shift, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  if (shift === undefined) return null;
+  const toggle = async () => {
+    setBusy(true);
+    const { error } = await supabase.rpc(shift ? "end_shift" : "start_shift");
+    setBusy(false);
+    if (error) onError(error.message);
+    onChange();
+  };
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, p: 1.5, mb: 2, borderRadius: "12px",
+      border: "1px solid", borderColor: shift ? "#C9CDEB" : "#E7E5E4", background: shift ? "#EEF0FA" : "#fff" }}>
+      <Typography sx={{ fontSize: 13.5, fontWeight: 700, color: shift ? "#4F5BA6" : "#57534E" }}>
+        {shift ? `Turno aberto desde ${new Date(shift.started_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : "Fora de turno"}
+      </Typography>
+      <Button size="small" variant={shift ? "outlined" : "contained"} disabled={busy} onClick={toggle}>
+        {shift ? "Encerrar turno" : "Iniciar turno"}
+      </Button>
+    </Box>
+  );
+}
+
 export default function CourierDeliveries() {
   const { profile } = useAuth();
   const [runs, setRuns] = useState(null);
@@ -74,16 +98,19 @@ export default function CourierDeliveries() {
   const [showProblem, setShowProblem] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [shift, setShift] = useState(undefined);
   const lastPing = useRef(0);
   const routeFrom = useRef(null);
   const offRef = useRef(false);
 
   const load = useCallback(async () => {
-    const [r, c] = await Promise.all([
+    const [r, c, s] = await Promise.all([
       supabase.from("delivery_runs").select("*, orders:delivery_orders(*)").eq("courier_id", profile.id)
         .in("status", ["planned", "in_progress"]).order("created_at"),
       supabase.rpc("my_company_settings").maybeSingle(),
+      supabase.from("courier_shifts").select("id, started_at").eq("courier_id", profile.id).is("ended_at", null).maybeSingle(),
     ]);
+    setShift(s.data || null);
     setRuns((r.data || []).map((run) => ({ ...run, orders: (run.orders || []).sort((a, b) => a.stop_sequence - b.stop_sequence) })));
     setCompany(c.data);
   }, [profile.id]);
@@ -108,8 +135,9 @@ export default function CourierDeliveries() {
   useWakeLock(Boolean(activeRun));
 
   // ── GPS ────────────────────────────────────────────────────────────────
+  const gpsOn = Boolean(runs?.length || shift);
   useEffect(() => {
-    if (!runs?.length) return;
+    if (!gpsOn) return;
     if (!window.isSecureContext || !navigator.geolocation) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setGeoError("O GPS só funciona em conexão segura (https).");
@@ -121,21 +149,22 @@ export default function CourierDeliveries() {
       { enableHighAccuracy: true, maximumAge: 5000 },
     );
     return () => navigator.geolocation.clearWatch(id);
-  }, [runs?.length]);
+  }, [gpsOn]);
 
-  // Envia posição (última posição + histórico) durante a saída.
+  // Envia posição (última posição + histórico) durante a saída e durante o
+  // turno (o km da volta para a base também conta no acerto).
   useEffect(() => {
-    if (!activeRun || !myPos) return;
+    if ((!activeRun && !shift) || !myPos) return;
     const now = Date.now();
     if (now - lastPing.current < PING_INTERVAL_MS) return;
     lastPing.current = now;
     const at = new Date().toISOString();
     supabase.from("profiles").update({ last_lat: myPos.lat, last_lng: myPos.lng, last_location_at: at }).eq("id", profile.id).then(() => {});
     supabase.from("location_pings").insert({
-      company_id: profile.company_id, courier_id: profile.id, run_id: activeRun.id,
+      company_id: profile.company_id, courier_id: profile.id, run_id: activeRun?.id ?? null,
       lat: myPos.lat, lng: myPos.lng, accuracy: myPos.accuracy, speed: myPos.speed, off_route: offRef.current,
     }).then(() => {});
-  }, [myPos, activeRun, profile.id, profile.company_id]);
+  }, [myPos, activeRun, shift, profile.id, profile.company_id]);
 
   // ── 3 opções de rota até a parada atual ─────────────────────────────────
   // A rota é calculada uma vez por parada (a partir de onde o motoboy está
@@ -210,6 +239,7 @@ export default function CourierDeliveries() {
   return (
     <AppShell title="Minhas entregas">
       <CollaboratorNav />
+      <ShiftBar shift={shift} onChange={load} onError={(text) => setMsg({ type: "error", text })} />
       {msg && <Alert severity={msg.type} sx={{ mb: 2 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       {geoError && <Alert severity="warning" sx={{ mb: 2 }}>{geoError}</Alert>}
 

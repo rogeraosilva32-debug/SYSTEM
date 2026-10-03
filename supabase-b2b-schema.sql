@@ -1986,3 +1986,628 @@ create policy company_branding_write on storage.objects
     and public.my_company_role() = 'company_admin'
     and exists (select 1 from public.companies c where c.id = public.my_company_id() and c.feature_branding)
   );
+
+-- =====================================================================
+-- FASES 3 E 4 — FINANCEIRO E RELATÓRIOS
+-- Turnos e acerto do motoboy, conferência de pagamento, caixa do dia,
+-- faturas da licença e relatórios (financeiro, produtividade, licenças).
+-- Valores calculados sempre no banco, por funções; o navegador só lê.
+-- =====================================================================
+
+-- Fuso usado para "dia" nos relatórios e no caixa.
+alter table public.companies add column if not exists timezone text not null default 'America/Sao_Paulo';
+-- Remuneração padrão do motoboy (o admin da empresa ajusta).
+alter table public.companies add column if not exists courier_daily_rate numeric(10,2) not null default 0;
+alter table public.companies add column if not exists courier_per_delivery numeric(10,2) not null default 0;
+alter table public.companies add column if not exists courier_per_km numeric(10,2) not null default 0;
+-- Cobrança da licença (só a plataforma altera).
+alter table public.companies add column if not exists monthly_price numeric(10,2) not null default 0;
+alter table public.companies add column if not exists billing_day integer not null default 10
+  check (billing_day between 1 and 28);
+alter table public.companies add column if not exists grace_days integer not null default 5
+  check (grace_days between 0 and 60);
+
+create or replace function public.guard_company_billing()
+returns trigger language plpgsql as $$
+begin
+  if not public.is_client_call() or public.is_platform_admin() then
+    return new;
+  end if;
+  if new.monthly_price is distinct from old.monthly_price
+     or new.billing_day is distinct from old.billing_day
+     or new.grace_days is distinct from old.grace_days then
+    raise exception 'Somente a plataforma altera a cobrança da licença.';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_guard_company_billing on public.companies;
+create trigger trg_guard_company_billing before update on public.companies
+  for each row execute function public.guard_company_billing();
+
+-- Distância em metros entre dois pontos (fórmula de haversine).
+create or replace function public.geo_distance_m(lat1 double precision, lng1 double precision,
+                                                 lat2 double precision, lng2 double precision)
+returns double precision language sql immutable as $$
+  select 2 * 6371000 * asin(sqrt(
+    power(sin(radians(lat2 - lat1) / 2), 2)
+    + cos(radians(lat1)) * cos(radians(lat2)) * power(sin(radians(lng2 - lng1) / 2), 2)))
+$$;
+
+-- Km rodado por um motoboy num intervalo, a partir das posições gravadas.
+-- Saltos acima de 2 km entre duas posições seguidas são erro de GPS ou
+-- app fechado no caminho, e não entram na soma.
+create or replace function public.courier_km(p_courier uuid, p_from timestamptz, p_to timestamptz)
+returns numeric language sql stable security definer as $$
+  select coalesce(round((sum(d) / 1000)::numeric, 2), 0)
+  from (
+    select public.geo_distance_m(lag(lat) over w, lag(lng) over w, lat, lng) as d
+    from public.location_pings
+    where courier_id = p_courier and recorded_at >= p_from and recorded_at < p_to
+    window w as (order by recorded_at)
+  ) x
+  where d is not null and d < 2000
+$$;
+revoke execute on function public.courier_km(uuid, timestamptz, timestamptz) from public, anon, authenticated;
+
+-- Intervalo [início, fim) de um período em dias inteiros, no fuso da empresa.
+create or replace function public.company_period(p_company uuid, p_from date, p_to date,
+                                                 out o_from timestamptz, out o_to timestamptz)
+language sql stable security definer as $$
+  select (p_from::timestamp at time zone c.timezone), ((p_to + 1)::timestamp at time zone c.timezone)
+  from public.companies c where c.id = p_company
+$$;
+revoke execute on function public.company_period(uuid, date, date) from public, anon, authenticated;
+
+-- Contagem de desvios por saída (para o relatório de produtividade).
+alter table public.delivery_runs add column if not exists off_route_events integer not null default 0;
+
+create or replace function public.notify_run_off_route(p_run uuid, p_meters integer default null)
+returns void language plpgsql security definer as $$
+declare v_run record;
+begin
+  select r.*, p.name as courier_name into v_run
+    from public.delivery_runs r join public.profiles p on p.id = r.courier_id
+    where r.id = p_run and r.courier_id = auth.uid() and r.status = 'in_progress';
+  if v_run.id is null then raise exception 'Saída não encontrada.'; end if;
+  if v_run.last_off_route_at is not null and v_run.last_off_route_at > now() - interval '5 minutes' then
+    return;
+  end if;
+  update public.delivery_runs set last_off_route_at = now(), off_route_events = off_route_events + 1
+    where id = p_run;
+  perform public.notify_company_managers(v_run.company_id, 'off_route',
+    case when v_run.strict_route then 'Desvio de rota (rota exata)' else 'Desvio de rota' end,
+    v_run.courier_name || ' saiu do trajeto' || coalesce(' (' || p_meters || ' m)', '') || '.');
+end;
+$$;
+grant execute on function public.notify_run_off_route(uuid, integer) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Valores próprios de um motoboy (vazio = usa o padrão da empresa)
+-- ---------------------------------------------------------------------
+create table if not exists public.courier_rates (
+  courier_id uuid primary key references public.profiles(id) on delete cascade,
+  company_id uuid not null references public.companies(id) on delete cascade,
+  daily_rate numeric(10,2) check (daily_rate >= 0),
+  per_delivery numeric(10,2) check (per_delivery >= 0),
+  per_km numeric(10,2) check (per_km >= 0),
+  updated_at timestamptz not null default now()
+);
+alter table public.courier_rates enable row level security;
+drop policy if exists courier_rates_admin on public.courier_rates;
+create policy courier_rates_admin on public.courier_rates
+  for all using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+  with check (
+    company_id = public.my_company_id() and public.my_company_role() = 'company_admin'
+    and exists (select 1 from public.profiles p where p.id = courier_id and p.company_id = public.my_company_id())
+  );
+drop policy if exists courier_rates_own on public.courier_rates;
+create policy courier_rates_own on public.courier_rates for select using (courier_id = auth.uid());
+
+-- ---------------------------------------------------------------------
+-- Turnos do motoboy
+-- ---------------------------------------------------------------------
+create table if not exists public.courier_shifts (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  courier_id uuid not null references public.profiles(id) on delete cascade,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz,
+  km numeric(10,2),
+  closed_by uuid references public.profiles(id)
+);
+create index if not exists courier_shifts_courier_idx on public.courier_shifts(courier_id, started_at desc);
+create unique index if not exists courier_shifts_one_open on public.courier_shifts(courier_id) where ended_at is null;
+alter table public.courier_shifts enable row level security;
+drop policy if exists courier_shifts_read on public.courier_shifts;
+create policy courier_shifts_read on public.courier_shifts
+  for select using (
+    courier_id = auth.uid()
+    or (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or courier_id in (select public.my_supervised_ids())
+    or public.is_platform_admin()
+  );
+
+create or replace function public.start_shift()
+returns uuid language plpgsql security definer as $$
+declare v_id uuid;
+begin
+  if public.my_company_role() is distinct from 'collaborator' then raise exception 'Só o motoboy inicia turno.'; end if;
+  if exists (select 1 from public.courier_shifts where courier_id = auth.uid() and ended_at is null) then
+    raise exception 'Já existe um turno aberto.';
+  end if;
+  insert into public.courier_shifts (company_id, courier_id) values (public.my_company_id(), auth.uid())
+    returning id into v_id;
+  return v_id;
+end;
+$$;
+grant execute on function public.start_shift() to authenticated;
+
+-- Encerra um turno: o próprio motoboy, ou o admin da empresa (turno esquecido aberto).
+create or replace function public.end_shift(p_shift uuid default null)
+returns void language plpgsql security definer as $$
+declare v record;
+begin
+  select * into v from public.courier_shifts s
+    where s.ended_at is null
+      and (case when p_shift is null then s.courier_id = auth.uid() else s.id = p_shift end);
+  if v.id is null then raise exception 'Nenhum turno aberto.'; end if;
+  if v.courier_id <> auth.uid() and not (v.company_id = public.my_company_id() and public.my_company_role() = 'company_admin') then
+    raise exception 'Sem permissão para encerrar este turno.';
+  end if;
+  update public.courier_shifts set ended_at = now(), closed_by = auth.uid(),
+         km = public.courier_km(v.courier_id, v.started_at, now())
+    where id = v.id;
+end;
+$$;
+grant execute on function public.end_shift(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Conferência de pagamento (dinheiro/troco que o motoboy traz de volta)
+-- ---------------------------------------------------------------------
+alter table public.delivery_orders add column if not exists payment_received boolean not null default false;
+alter table public.delivery_orders add column if not exists payment_received_at timestamptz;
+alter table public.delivery_orders add column if not exists payment_received_by uuid references public.profiles(id);
+
+create or replace function public.guard_order_payment()
+returns trigger language plpgsql as $$
+begin
+  if public.is_client_call() and (
+       new.payment_received is distinct from old.payment_received
+    or new.payment_received_at is distinct from old.payment_received_at
+    or new.payment_received_by is distinct from old.payment_received_by) then
+    raise exception 'Use a conferência de pagamento para marcar recebimento.';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_guard_order_payment on public.delivery_orders;
+create trigger trg_guard_order_payment before update on public.delivery_orders
+  for each row execute function public.guard_order_payment();
+
+create or replace function public.confirm_payments(p_order_ids uuid[], p_received boolean default true)
+returns integer language plpgsql security definer as $$
+declare n integer;
+begin
+  if not public.is_order_manager() then raise exception 'Sem permissão.'; end if;
+  update public.delivery_orders
+    set payment_received = p_received,
+        payment_received_at = case when p_received then now() end,
+        payment_received_by = case when p_received then auth.uid() end
+    where id = any(p_order_ids) and company_id = public.my_company_id() and status = 'delivered';
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+grant execute on function public.confirm_payments(uuid[], boolean) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Caixa do dia: abertura, sangrias, reforços e despesas
+-- ---------------------------------------------------------------------
+create table if not exists public.cash_movements (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  kind text not null check (kind in ('opening', 'deposit', 'withdrawal', 'expense')),
+  amount numeric(10,2) not null check (amount > 0),
+  note text,
+  created_by uuid references public.profiles(id) default auth.uid(),
+  created_at timestamptz not null default now()
+);
+create index if not exists cash_movements_company_idx on public.cash_movements(company_id, created_at desc);
+alter table public.cash_movements enable row level security;
+drop policy if exists cash_movements_admin on public.cash_movements;
+create policy cash_movements_admin on public.cash_movements
+  for all using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+  with check (company_id = public.my_company_id() and public.my_company_role() = 'company_admin'
+              and created_by = auth.uid());
+
+-- ---------------------------------------------------------------------
+-- Acerto do motoboy: diária x dias trabalhados + valor por entrega + km
+-- ---------------------------------------------------------------------
+create table if not exists public.settlements (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  courier_id uuid not null references public.profiles(id) on delete cascade,
+  period_start date not null,
+  period_end date not null,
+  days_worked integer not null default 0,
+  deliveries integer not null default 0,
+  km numeric(10,2) not null default 0,
+  daily_rate numeric(10,2) not null default 0,
+  per_delivery numeric(10,2) not null default 0,
+  per_km numeric(10,2) not null default 0,
+  daily_total numeric(10,2) not null default 0,
+  delivery_total numeric(10,2) not null default 0,
+  km_total numeric(10,2) not null default 0,
+  adjustment numeric(10,2) not null default 0,
+  adjustment_note text,
+  total numeric(10,2) not null default 0,
+  cash_collected numeric(10,2) not null default 0,
+  status text not null default 'open' check (status in ('open', 'paid')),
+  paid_at timestamptz,
+  created_by uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  check (period_end >= period_start)
+);
+create index if not exists settlements_company_idx on public.settlements(company_id, period_end desc);
+alter table public.settlements enable row level security;
+drop policy if exists settlements_read on public.settlements;
+create policy settlements_read on public.settlements
+  for select using (
+    courier_id = auth.uid()
+    or (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  );
+
+-- Cálculo do acerto (sem gravar). Dias trabalhados = dias com turno ou
+-- com entrega; km = turnos encerrados + posições fora de turno no período.
+create or replace function public.compute_settlement(p_courier uuid, p_from date, p_to date)
+returns jsonb language plpgsql stable security definer as $$
+declare
+  v_company uuid;
+  c record;
+  r record;
+  v_from timestamptz; v_to timestamptz;
+  v_days int; v_deliv int; v_km numeric; v_cash numeric;
+  v_daily numeric; v_per numeric; v_perkm numeric;
+begin
+  select company_id into v_company from public.profiles where id = p_courier;
+  select * into c from public.companies where id = v_company;
+  select * into r from public.courier_rates where courier_id = p_courier;
+  select o_from, o_to into v_from, v_to from public.company_period(v_company, p_from, p_to);
+
+  v_daily := coalesce(r.daily_rate, c.courier_daily_rate);
+  v_per := coalesce(r.per_delivery, c.courier_per_delivery);
+  v_perkm := coalesce(r.per_km, c.courier_per_km);
+
+  select count(*), coalesce(sum(o.total) filter (where o.payment_method = 'dinheiro'), 0)
+    into v_deliv, v_cash
+    from public.delivery_orders o
+    where o.courier_id = p_courier and o.status = 'delivered'
+      and o.delivered_at >= v_from and o.delivered_at < v_to;
+
+  select count(*) into v_days from (
+    select (s.started_at at time zone c.timezone)::date from public.courier_shifts s
+      where s.courier_id = p_courier and s.started_at >= v_from and s.started_at < v_to
+    union
+    select (o.delivered_at at time zone c.timezone)::date from public.delivery_orders o
+      where o.courier_id = p_courier and o.status = 'delivered'
+        and o.delivered_at >= v_from and o.delivered_at < v_to
+  ) d;
+
+  v_km := public.courier_km(p_courier, v_from, v_to);
+
+  return jsonb_build_object(
+    'courier_id', p_courier, 'company_id', v_company,
+    'period_start', p_from, 'period_end', p_to,
+    'days_worked', v_days, 'deliveries', v_deliv, 'km', v_km,
+    'daily_rate', v_daily, 'per_delivery', v_per, 'per_km', v_perkm,
+    'daily_total', round(v_days * v_daily, 2),
+    'delivery_total', round(v_deliv * v_per, 2),
+    'km_total', round(v_km * v_perkm, 2),
+    'total', round(v_days * v_daily + v_deliv * v_per + v_km * v_perkm, 2),
+    'cash_collected', v_cash);
+end;
+$$;
+revoke execute on function public.compute_settlement(uuid, date, date) from public, anon, authenticated;
+
+-- Prévia: o admin vê de qualquer motoboy da empresa; o motoboy, só a dele.
+create or replace function public.preview_settlement(p_courier uuid, p_from date, p_to date)
+returns jsonb language plpgsql stable security definer as $$
+begin
+  if p_courier <> auth.uid() and not exists (
+    select 1 from public.profiles p where p.id = p_courier and p.company_id = public.my_company_id()
+      and public.my_company_role() = 'company_admin') then
+    raise exception 'Sem permissão.';
+  end if;
+  return public.compute_settlement(p_courier, p_from, p_to);
+end;
+$$;
+grant execute on function public.preview_settlement(uuid, date, date) to authenticated;
+
+create or replace function public.create_settlement(p_courier uuid, p_from date, p_to date,
+                                                    p_adjustment numeric default 0, p_note text default null)
+returns uuid language plpgsql security definer as $$
+declare v jsonb; v_id uuid;
+begin
+  if public.my_company_role() is distinct from 'company_admin' then raise exception 'Sem permissão.'; end if;
+  if not exists (select 1 from public.profiles p where p.id = p_courier and p.company_id = public.my_company_id()) then
+    raise exception 'Motoboy inválido para esta empresa.';
+  end if;
+  if p_to < p_from then raise exception 'Período inválido.'; end if;
+  if exists (select 1 from public.settlements s where s.courier_id = p_courier
+             and s.period_start <= p_to and s.period_end >= p_from) then
+    raise exception 'Já existe acerto deste motoboy nesse período.';
+  end if;
+  v := public.compute_settlement(p_courier, p_from, p_to);
+  insert into public.settlements (company_id, courier_id, period_start, period_end, days_worked, deliveries, km,
+      daily_rate, per_delivery, per_km, daily_total, delivery_total, km_total, adjustment, adjustment_note,
+      total, cash_collected, created_by)
+    values (public.my_company_id(), p_courier, p_from, p_to, (v->>'days_worked')::int, (v->>'deliveries')::int,
+      (v->>'km')::numeric, (v->>'daily_rate')::numeric, (v->>'per_delivery')::numeric, (v->>'per_km')::numeric,
+      (v->>'daily_total')::numeric, (v->>'delivery_total')::numeric, (v->>'km_total')::numeric,
+      coalesce(p_adjustment, 0), nullif(btrim(p_note), ''),
+      (v->>'total')::numeric + coalesce(p_adjustment, 0), (v->>'cash_collected')::numeric, auth.uid())
+    returning id into v_id;
+  perform public.log_audit(public.my_company_id(), 'settlement_created',
+    jsonb_build_object('settlement_id', v_id, 'courier_id', p_courier, 'from', p_from, 'to', p_to));
+  return v_id;
+end;
+$$;
+grant execute on function public.create_settlement(uuid, date, date, numeric, text) to authenticated;
+
+create or replace function public.pay_settlement(p_id uuid)
+returns void language plpgsql security definer as $$
+begin
+  if public.my_company_role() is distinct from 'company_admin' then raise exception 'Sem permissão.'; end if;
+  update public.settlements set status = 'paid', paid_at = now()
+    where id = p_id and company_id = public.my_company_id() and status = 'open';
+  if not found then raise exception 'Acerto não encontrado ou já pago.'; end if;
+  perform public.log_audit(public.my_company_id(), 'settlement_paid', jsonb_build_object('settlement_id', p_id));
+end;
+$$;
+grant execute on function public.pay_settlement(uuid) to authenticated;
+
+create or replace function public.delete_settlement(p_id uuid)
+returns void language plpgsql security definer as $$
+begin
+  if public.my_company_role() is distinct from 'company_admin' then raise exception 'Sem permissão.'; end if;
+  delete from public.settlements where id = p_id and company_id = public.my_company_id() and status = 'open';
+  if not found then raise exception 'Só dá para excluir acerto em aberto.'; end if;
+  perform public.log_audit(public.my_company_id(), 'settlement_deleted', jsonb_build_object('settlement_id', p_id));
+end;
+$$;
+grant execute on function public.delete_settlement(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Faturas da licença (a plataforma gera e dá baixa; a empresa vê as suas)
+-- ---------------------------------------------------------------------
+create table if not exists public.license_invoices (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  reference_month date not null,
+  amount numeric(10,2) not null check (amount >= 0),
+  due_date date not null,
+  status text not null default 'pending' check (status in ('pending', 'paid', 'cancelled')),
+  paid_at timestamptz,
+  notes text,
+  created_at timestamptz not null default now(),
+  unique (company_id, reference_month)
+);
+alter table public.license_invoices enable row level security;
+drop policy if exists license_invoices_platform on public.license_invoices;
+create policy license_invoices_platform on public.license_invoices
+  for all using (public.is_platform_admin()) with check (public.is_platform_admin());
+drop policy if exists license_invoices_company on public.license_invoices;
+create policy license_invoices_company on public.license_invoices
+  for select using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin');
+
+-- Gera as faturas do mês para empresas ativas com mensalidade > 0.
+create or replace function public.generate_license_invoices(p_month date)
+returns integer language plpgsql security definer as $$
+declare n integer; v_month date := date_trunc('month', p_month)::date;
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  insert into public.license_invoices (company_id, reference_month, amount, due_date)
+    select c.id, v_month, c.monthly_price, v_month + (c.billing_day - 1)
+    from public.companies c
+    where c.status = 'active' and c.monthly_price > 0
+    on conflict (company_id, reference_month) do nothing;
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+grant execute on function public.generate_license_invoices(date) to authenticated;
+
+-- Suspende empresas com fatura vencida há mais que a carência. Rode pela
+-- tela da plataforma, ou agende (Database → Cron): select public.apply_overdue_suspensions();
+create or replace function public.apply_overdue_suspensions()
+returns integer language plpgsql security definer as $$
+declare n integer;
+begin
+  -- Sem usuário logado = agendamento (cron) no próprio banco.
+  if auth.uid() is not null and not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  with s as (
+    update public.companies c set status = 'suspended'
+    where c.status = 'active' and exists (
+      select 1 from public.license_invoices i
+      where i.company_id = c.id and i.status = 'pending' and i.due_date + c.grace_days < current_date)
+    returning c.id
+  ), a as (
+    insert into public.audit_log (company_id, actor_id, action, details)
+    select id, auth.uid(), 'company_suspended_overdue', '{}'::jsonb from s
+    returning 1
+  )
+  select count(*) into n from a;
+  return n;
+end;
+$$;
+revoke execute on function public.apply_overdue_suspensions() from public, anon;
+grant execute on function public.apply_overdue_suspensions() to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Relatórios (admin da empresa; a plataforma pode pedir de qualquer empresa)
+-- ---------------------------------------------------------------------
+create or replace function public.report_company(p_company uuid)
+returns uuid language plpgsql stable security definer as $$
+begin
+  if public.is_platform_admin() and p_company is not null then return p_company; end if;
+  if public.my_company_role() is distinct from 'company_admin' then raise exception 'Sem permissão.'; end if;
+  return public.my_company_id();
+end;
+$$;
+revoke execute on function public.report_company(uuid) from public, anon, authenticated;
+
+create or replace function public.report_financial(p_from date, p_to date, p_company uuid default null)
+returns jsonb language plpgsql stable security definer as $$
+declare v_company uuid := public.report_company(p_company); v_from timestamptz; v_to timestamptz; v_tz text;
+begin
+  select o_from, o_to into v_from, v_to from public.company_period(v_company, p_from, p_to);
+  select timezone into v_tz from public.companies where id = v_company;
+  return (
+    with o as (
+      select * from public.delivery_orders
+      where company_id = v_company and created_at >= v_from and created_at < v_to
+    ), d as (select * from o where status = 'delivered')
+    select jsonb_build_object(
+      'totals', (select jsonb_build_object(
+          'orders', (select count(*) from o),
+          'delivered', count(*),
+          'cancelled', (select count(*) from o where status = 'cancelled'),
+          'problems', (select count(*) from o where status = 'problem'),
+          'revenue', coalesce(sum(total), 0),
+          'subtotal', coalesce(sum(subtotal), 0),
+          'fees', coalesce(sum(delivery_fee), 0),
+          'avg_ticket', coalesce(round(avg(total), 2), 0),
+          'unconfirmed_cash', coalesce(sum(total) filter (where payment_method = 'dinheiro' and not payment_received), 0))
+        from d),
+      'by_payment', coalesce((select jsonb_agg(x order by x.total desc) from (
+          select coalesce(payment_method, 'nao_informado') as key, count(*) as count, sum(total) as total
+          from d group by 1) x), '[]'::jsonb),
+      'by_neighborhood', coalesce((select jsonb_agg(x order by x.total desc) from (
+          select coalesce(nullif(btrim(address_neighborhood), ''), 'Sem bairro') as key, count(*) as count,
+                 sum(total) as total, sum(coalesce(delivery_fee, 0)) as fees
+          from d group by 1) x), '[]'::jsonb),
+      'by_source', coalesce((select jsonb_agg(x order by x.count desc) from (
+          select source as key, count(*) as count, sum(total) as total from d group by 1) x), '[]'::jsonb),
+      'by_day', coalesce((select jsonb_agg(x order by x.day) from (
+          select (delivered_at at time zone v_tz)::date as day, count(*) as count, sum(total) as total
+          from d group by 1) x), '[]'::jsonb),
+      'settlements', (select jsonb_build_object(
+          'count', count(*), 'total', coalesce(sum(total), 0),
+          'paid', coalesce(sum(total) filter (where status = 'paid'), 0),
+          'open', coalesce(sum(total) filter (where status = 'open'), 0))
+        from public.settlements s
+        where s.company_id = v_company and s.period_start <= p_to and s.period_end >= p_from)
+    )
+  );
+end;
+$$;
+grant execute on function public.report_financial(date, date, uuid) to authenticated;
+
+create or replace function public.report_productivity(p_from date, p_to date, p_company uuid default null)
+returns jsonb language plpgsql stable security definer as $$
+declare v_company uuid := public.report_company(p_company); v_from timestamptz; v_to timestamptz;
+begin
+  select o_from, o_to into v_from, v_to from public.company_period(v_company, p_from, p_to);
+  return (
+    with o as (
+      select o.*, z.eta_minutes from public.delivery_orders o
+      left join public.delivery_zones z on z.id = o.zone_id
+      where o.company_id = v_company and o.created_at >= v_from and o.created_at < v_to
+    )
+    select jsonb_build_object(
+      'times', (select jsonb_build_object(
+          'prep_min', round(avg(extract(epoch from ready_at - created_at) / 60)::numeric, 1),
+          'wait_min', round(avg(extract(epoch from dispatched_at - coalesce(ready_at, created_at)) / 60)::numeric, 1),
+          'route_min', round(avg(extract(epoch from delivered_at - dispatched_at) / 60)::numeric, 1),
+          'total_min', round(avg(extract(epoch from delivered_at - created_at) / 60)::numeric, 1),
+          'late', count(*) filter (where eta_minutes is not null and delivered_at > created_at + make_interval(mins => eta_minutes)),
+          'with_eta', count(*) filter (where eta_minutes is not null))
+        from o where status = 'delivered'),
+      'couriers', coalesce((select jsonb_agg(x order by x.deliveries desc, x.name) from (
+          select p.id, p.name,
+            (select count(*) from o where o.courier_id = p.id and o.status = 'delivered') as deliveries,
+            (select count(*) from o where o.courier_id = p.id and o.status = 'delivered' and o.delivered_by_code) as by_code,
+            (select count(*) from o where o.courier_id = p.id and o.status = 'delivered' and o.forced_reason is not null) as forced,
+            (select count(*) from o where o.courier_id = p.id and (o.status = 'problem' or o.problem_reason is not null)) as problems,
+            (select count(*) from o where o.courier_id = p.id and o.status = 'delivered' and o.eta_minutes is not null
+               and o.delivered_at > o.created_at + make_interval(mins => o.eta_minutes)) as late,
+            (select round(avg(extract(epoch from o.delivered_at - o.dispatched_at) / 60)::numeric, 1)
+               from o where o.courier_id = p.id and o.status = 'delivered') as route_min,
+            (select count(*) from public.delivery_runs r where r.courier_id = p.id
+               and r.started_at >= v_from and r.started_at < v_to) as runs,
+            (select coalesce(sum(r.off_route_events), 0) from public.delivery_runs r where r.courier_id = p.id
+               and r.started_at >= v_from and r.started_at < v_to) as off_route,
+            public.courier_km(p.id, v_from, v_to) as km,
+            (select round(avg(a.customer_rating)::numeric, 2) from public.assignments a
+               where a.collaborator_id = p.id and a.rated_at >= v_from and a.rated_at < v_to) as rating_avg,
+            (select count(a.customer_rating) from public.assignments a
+               where a.collaborator_id = p.id and a.rated_at >= v_from and a.rated_at < v_to) as rating_count
+          from public.profiles p
+          where p.company_id = v_company and p.company_role = 'collaborator') x), '[]'::jsonb)
+    )
+  );
+end;
+$$;
+grant execute on function public.report_productivity(date, date, uuid) to authenticated;
+
+-- Caixa de um dia: vendas entregues por forma de pagamento + movimentos.
+create or replace function public.report_cash_day(p_day date)
+returns jsonb language plpgsql stable security definer as $$
+declare v_company uuid := public.report_company(null); v_from timestamptz; v_to timestamptz;
+begin
+  select o_from, o_to into v_from, v_to from public.company_period(v_company, p_day, p_day);
+  return (
+    with d as (
+      select * from public.delivery_orders
+      where company_id = v_company and status = 'delivered' and delivered_at >= v_from and delivered_at < v_to
+    ), m as (
+      select * from public.cash_movements where company_id = v_company and created_at >= v_from and created_at < v_to
+    )
+    select jsonb_build_object(
+      'by_payment', coalesce((select jsonb_agg(x order by x.total desc) from (
+          select coalesce(payment_method, 'nao_informado') as key, count(*) as count, sum(total) as total
+          from d group by 1) x), '[]'::jsonb),
+      'revenue', (select coalesce(sum(total), 0) from d),
+      'cash_sales', (select coalesce(sum(total), 0) from d where payment_method = 'dinheiro'),
+      'cash_received', (select coalesce(sum(total), 0) from d where payment_method = 'dinheiro' and payment_received),
+      'opening', (select coalesce(sum(amount), 0) from m where kind = 'opening'),
+      'deposits', (select coalesce(sum(amount), 0) from m where kind = 'deposit'),
+      'withdrawals', (select coalesce(sum(amount), 0) from m where kind = 'withdrawal'),
+      'expenses', (select coalesce(sum(amount), 0) from m where kind = 'expense'),
+      'movements', coalesce((select jsonb_agg(m order by m.created_at) from m), '[]'::jsonb),
+      'cash_orders', coalesce((select jsonb_agg(jsonb_build_object(
+          'id', d.id, 'number', d.number, 'customer_name', d.customer_name, 'total', d.total,
+          'change_for', d.change_for, 'courier', p.name, 'delivered_at', d.delivered_at,
+          'payment_received', d.payment_received) order by d.delivered_at)
+        from d left join public.profiles p on p.id = d.courier_id where d.payment_method = 'dinheiro'), '[]'::jsonb)
+    )
+  );
+end;
+$$;
+grant execute on function public.report_cash_day(date) to authenticated;
+
+-- Uso de licença (painel da plataforma).
+create or replace function public.report_license_usage()
+returns jsonb language plpgsql stable security definer as $$
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  return coalesce((select jsonb_agg(x order by x.name) from (
+    select c.id, c.name, c.status, c.seats_limit, c.monthly_price, c.created_at,
+      (select count(*) from public.profiles p where p.company_id = c.id and p.company_role = 'collaborator') as seats_used,
+      (select count(distinct o.courier_id) from public.delivery_orders o
+         where o.company_id = c.id and o.delivered_at > now() - interval '30 days') as active_couriers_30d,
+      (select count(*) from public.delivery_orders o
+         where o.company_id = c.id and o.created_at > now() - interval '30 days') as orders_30d,
+      (select count(*) from public.assignments a
+         where a.company_id = c.id and a.created_at > now() - interval '30 days') as assignments_30d,
+      (select max(o.created_at) from public.delivery_orders o where o.company_id = c.id) as last_order_at,
+      (select count(*) from public.license_invoices i where i.company_id = c.id and i.status = 'pending'
+         and i.due_date < current_date) as overdue_invoices,
+      (select coalesce(sum(i.amount), 0) from public.license_invoices i where i.company_id = c.id and i.status = 'pending'
+         and i.due_date < current_date) as overdue_amount
+    from public.companies c) x), '[]'::jsonb);
+end;
+$$;
+grant execute on function public.report_license_usage() to authenticated;

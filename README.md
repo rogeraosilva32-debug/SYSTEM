@@ -518,3 +518,19 @@ Agendar no Supabase (Database → Cron), diariamente:
 
 Testes: `supabase/tests/run.sh` (permissões e regras, banco local) e
 `supabase/tests/e2e/` (fluxo completo no navegador, veja o README de lá).
+
+## 27. Financeiro e relatórios (Fases 3 e 4)
+
+Tudo é calculado no banco, por funções (`report_financial`, `report_productivity`,
+`report_cash_day`, `report_license_usage`, `preview_settlement`/`create_settlement`).
+O navegador só mostra.
+
+- **Empresa → Relatórios:** financeiro e produtividade por período, CSV e Imprimir/PDF.
+- **Empresa → Financeiro:** caixa do dia, conferência do dinheiro, valores do motoboy, acertos, turnos e faturas da licença.
+- **Motoboy:** turno na tela de entregas e aba Ganhos.
+- **Plataforma:** Uso de licenças, Faturas (gerar, baixa, suspender inadimplentes) e cobrança por empresa.
+
+Para suspender inadimplentes sozinho todo dia, agende no Supabase (Database → Cron):
+`select public.apply_overdue_suspensions();`
+
+Teste no navegador: `node supabase/tests/e2e/fluxo-financeiro.mjs` (depois do `setup.sh`).

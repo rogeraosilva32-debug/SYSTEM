@@ -15,6 +15,8 @@ import RouteMap from "../components/RouteMap";
 import AuditLogViewer from "../components/AuditLogViewer";
 import InfoField from "../components/InfoField";
 import { generateCode } from "../utils/codeGenerator";
+import { LicenseUsage, InvoicesTab, CompanyBilling } from "./platform/PlatformBilling";
+import { ReportsTab } from "./company/ReportsTab";
 
 function copyToClipboard(text) {
   navigator.clipboard?.writeText(text).catch(() => {});
@@ -183,6 +185,8 @@ function CompanyDetail({ company, onBack, onUpdated }) {
         ))}
       </Box>
 
+      <CompanyBilling key={company.id} company={company} onUpdated={onUpdated} />
+
       <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1.5, mb: 3 }}>
         <TextField
           label="Limite de colaboradores" type="number" size="small"
@@ -197,11 +201,12 @@ function CompanyDetail({ company, onBack, onUpdated }) {
         </Typography>
       </Box>
 
-      <Box sx={{ display: "flex", gap: 0.5, mb: 2, borderBottom: "1px solid #E7E5E4" }}>
+      <Box sx={{ display: "flex", gap: 0.5, mb: 2, borderBottom: "1px solid #E7E5E4", overflowX: "auto" }}>
         {[
           { key: "collaborators", label: `Colaboradores (${collaborators?.length ?? "…"})` },
           { key: "services", label: `Serviços (${services?.length ?? "…"})` },
           { key: "assignments", label: `Designações (${assignments?.length ?? "…"})` },
+          { key: "reports", label: "Relatórios" },
           { key: "audit", label: "Auditoria" },
         ].map((t) => (
           <Box key={t.key} onClick={() => setTab(t.key)} sx={{
@@ -254,6 +259,7 @@ function CompanyDetail({ company, onBack, onUpdated }) {
         </Table>
       )}
 
+      {tab === "reports" && <ReportsTab companyId={company.id} />}
       {tab === "audit" && <AuditLogViewer companyId={company.id} />}
 
       <Dialog open={!!detail} onClose={() => setDetail(null)} maxWidth="sm" fullWidth>
@@ -288,6 +294,7 @@ export default function PlatformAdmin() {
   const [companies, setCompanies] = useState(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [view, setView] = useState("companies");
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("companies").select("*").order("created_at", { ascending: false });
@@ -305,13 +312,34 @@ export default function PlatformAdmin() {
   return (
     <AppShell
       title="Empresas licenciadas"
-      actions={!selected && (
+      actions={!selected && view === "companies" && (
         <Button startIcon={<AddIcon />} variant="contained" onClick={() => setDialogOpen(true)} sx={{ borderRadius: "10px" }}>
           Nova empresa
         </Button>
       )}
     >
-      {selected ? (
+      {!selected && (
+        <Box sx={{ display: "flex", gap: 0.5, mb: 3, borderBottom: "1px solid #E7E5E4", overflowX: "auto" }}>
+          {[
+            { key: "companies", label: "Empresas" },
+            { key: "usage", label: "Uso de licenças" },
+            { key: "invoices", label: "Faturas" },
+          ].map((t) => (
+            <Box key={t.key} onClick={() => setView(t.key)} sx={{
+              px: 2, py: 1.2, cursor: "pointer", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
+              color: view === t.key ? "#1C1917" : "#A8A29E",
+              borderBottom: view === t.key ? "2px solid #1C1917" : "2px solid transparent",
+            }}>
+              {t.label}
+            </Box>
+          ))}
+        </Box>
+      )}
+      {!selected && view === "usage" ? (
+        <LicenseUsage onOpenCompany={(id) => { const c = companies?.find((x) => x.id === id); if (c) setSelected(c); }} />
+      ) : !selected && view === "invoices" ? (
+        <InvoicesTab />
+      ) : selected ? (
         <CompanyDetail company={selected} onBack={() => setSelected(null)} onUpdated={handleUpdated} />
       ) : companies === null ? (
         <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>

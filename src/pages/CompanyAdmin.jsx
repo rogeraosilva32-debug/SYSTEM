@@ -9,6 +9,8 @@ import { OrdersTab } from "./company/OrdersTab";
 import { LiveMapTab } from "./company/LiveMapTab";
 import { DeliverySettingsTab } from "./company/DeliverySettingsTab";
 import { BrandingTab } from "./company/BrandingTab";
+import { ReportsTab } from "./company/ReportsTab";
+import { FinanceTab } from "./company/FinanceTab";
 import { useCompanySettings } from "../hooks/useCompanySettings";
 import AuditLogViewer from "../components/AuditLogViewer";
 import { useAuth } from "../context/AuthContext";
@@ -16,6 +18,8 @@ import { useAuth } from "../context/AuthContext";
 const TABS = [
   { key: "orders", label: "Pedidos" },
   { key: "live", label: "Mapa ao vivo" },
+  { key: "reports", label: "Relatórios" },
+  { key: "finance", label: "Financeiro" },
   { key: "collaborators", label: "Colaboradores" },
   { key: "services", label: "Serviços" },
   { key: "assignments", label: "Designações" },
@@ -34,7 +38,7 @@ export default function CompanyAdmin() {
 
   return (
     <AppShell title="Painel da empresa">
-      <Box sx={{ display: "flex", gap: 0.5, mb: 3, borderBottom: "1px solid #E7E5E4", overflowX: "auto" }}>
+      <Box className="no-print" sx={{ display: "flex", gap: 0.5, mb: 3, borderBottom: "1px solid #E7E5E4", overflowX: "auto" }}>
         {tabs.map((t) => (
           <Box
             key={t.key}
@@ -52,6 +56,8 @@ export default function CompanyAdmin() {
 
       {tab === "orders" && <OrdersTab />}
       {tab === "live" && <LiveMapTab />}
+      {tab === "reports" && <ReportsTab />}
+      {tab === "finance" && <FinanceTab />}
       {tab === "delivery" && <DeliverySettingsTab />}
       {tab === "collaborators" && <CollaboratorsTab />}
       {tab === "services" && <ServicesTab />}

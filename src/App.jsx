@@ -17,6 +17,7 @@ const PlatformAdmin = lazy(() => import("./pages/PlatformAdmin"));
 const CompanyAdmin = lazy(() => import("./pages/CompanyAdmin"));
 const CollaboratorTasks = lazy(() => import("./pages/CollaboratorTasks"));
 const CourierDeliveries = lazy(() => import("./pages/CourierDeliveries"));
+const CourierEarnings = lazy(() => import("./pages/CourierEarnings"));
 const CollaboratorChat = lazy(() => import("./pages/CollaboratorChat"));
 const SupervisorDashboard = lazy(() => import("./pages/SupervisorDashboard"));
 const RatingPage = lazy(() => import("./pages/RatingPage"));
@@ -50,6 +51,7 @@ function AnimatedApp() {
             <Route path="/supervisao" element={<RoleRoute allow={["supervisor"]}><SupervisorDashboard /></RoleRoute>} />
             <Route path="/entregas" element={<RoleRoute allow={["collaborator"]}><CourierDeliveries /></RoleRoute>} />
           <Route path="/tarefas" element={<RoleRoute allow={["collaborator"]}><CollaboratorTasks /></RoleRoute>} />
+            <Route path="/ganhos" element={<RoleRoute allow={["collaborator"]}><CourierEarnings /></RoleRoute>} />
             <Route path="/mensagens" element={<RoleRoute allow={["collaborator"]}><CollaboratorChat /></RoleRoute>} />
 
             <Route path="*" element={<Navigate to="/" replace />} />

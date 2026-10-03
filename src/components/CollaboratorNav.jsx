@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 const ITEMS = [
   { path: "/entregas", label: "Entregas" },
   { path: "/tarefas", label: "Tarefas" },
+  { path: "/ganhos", label: "Ganhos" },
 ];
 
 // Abas do colaborador: entregas (motoboy) e tarefas agendadas.

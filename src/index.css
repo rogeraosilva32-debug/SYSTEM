@@ -18,3 +18,9 @@ body {
   flex-direction: column;
   box-sizing: border-box;
 }
+
+/* Impressão / PDF dos relatórios: só o conteúdo, sem cabeçalho e abas. */
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff !important; }
+}
