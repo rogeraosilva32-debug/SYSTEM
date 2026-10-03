@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { useLocation } from "react-router-dom";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AnimatePresence } from "framer-motion";
@@ -10,12 +11,14 @@ import Welcome from "./pages/Welcome";
 import Login from "./pages/Login";
 import ResetPassword from "./pages/ResetPassword";
 import Activate from "./pages/Activate";
-import PlatformAdmin from "./pages/PlatformAdmin";
-import CompanyAdmin from "./pages/CompanyAdmin";
-import CollaboratorTasks from "./pages/CollaboratorTasks";
-import CollaboratorChat from "./pages/CollaboratorChat";
-import SupervisorDashboard from "./pages/SupervisorDashboard";
-import RatingPage from "./pages/RatingPage";
+// Telas de cada papel carregam sob demanda: o motoboy não precisa baixar o
+// painel da plataforma (o app inteiro num arquivo só tinha 1,1 MB).
+const PlatformAdmin = lazy(() => import("./pages/PlatformAdmin"));
+const CompanyAdmin = lazy(() => import("./pages/CompanyAdmin"));
+const CollaboratorTasks = lazy(() => import("./pages/CollaboratorTasks"));
+const CollaboratorChat = lazy(() => import("./pages/CollaboratorChat"));
+const SupervisorDashboard = lazy(() => import("./pages/SupervisorDashboard"));
+const RatingPage = lazy(() => import("./pages/RatingPage"));
 
 function RootRoute() {
   const auth = useAuth();
@@ -31,23 +34,25 @@ function AnimatedApp() {
   return (
     <AnimatePresence mode="wait">
       <PageTransition routeKey={location.pathname}>
-        <Routes location={location}>
-          <Route path="/" element={<RootRoute />} />
-          <Route path="/welcome" element={<Welcome />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
-          <Route path="/avaliar/:token" element={<RatingPage />} />
+        <Suspense fallback={null}>
+          <Routes location={location}>
+            <Route path="/" element={<RootRoute />} />
+            <Route path="/welcome" element={<Welcome />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/avaliar/:token" element={<RatingPage />} />
 
-          <Route path="/ativar" element={<ProtectedRoute><Activate /></ProtectedRoute>} />
+            <Route path="/ativar" element={<ProtectedRoute><Activate /></ProtectedRoute>} />
 
-          <Route path="/plataforma" element={<RoleRoute allow={["platform"]}><PlatformAdmin /></RoleRoute>} />
-          <Route path="/painel" element={<RoleRoute allow={["company_admin"]}><CompanyAdmin /></RoleRoute>} />
-          <Route path="/supervisao" element={<RoleRoute allow={["supervisor"]}><SupervisorDashboard /></RoleRoute>} />
-          <Route path="/tarefas" element={<RoleRoute allow={["collaborator"]}><CollaboratorTasks /></RoleRoute>} />
-          <Route path="/mensagens" element={<RoleRoute allow={["collaborator"]}><CollaboratorChat /></RoleRoute>} />
+            <Route path="/plataforma" element={<RoleRoute allow={["platform"]}><PlatformAdmin /></RoleRoute>} />
+            <Route path="/painel" element={<RoleRoute allow={["company_admin"]}><CompanyAdmin /></RoleRoute>} />
+            <Route path="/supervisao" element={<RoleRoute allow={["supervisor"]}><SupervisorDashboard /></RoleRoute>} />
+            <Route path="/tarefas" element={<RoleRoute allow={["collaborator"]}><CollaboratorTasks /></RoleRoute>} />
+            <Route path="/mensagens" element={<RoleRoute allow={["collaborator"]}><CollaboratorChat /></RoleRoute>} />
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </PageTransition>
     </AnimatePresence>
   );

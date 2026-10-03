@@ -19,9 +19,15 @@ npm install
 npm run dev
 ```
 
-Abre em `http://localhost:5173`. O `.env` já vem preenchido com as
-credenciais do Supabase (as mesmas do projeto anterior — mesmo banco,
-schema novo).
+Antes, copie `.env.example` para `.env` e preencha com os dados do seu
+projeto Supabase (de preferência um projeto de **teste**, separado do de
+produção). O `.env` não vai para o git. Abre em `http://localhost:5173`.
+
+Testes de permissão do banco (precisa de um Postgres local):
+
+```bash
+supabase/tests/run.sh
+```
 
 ```bash
 npm run build     # build de produção em dist/ (já inclui o service worker do PWA)

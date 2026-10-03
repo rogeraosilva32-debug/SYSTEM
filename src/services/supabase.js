@@ -1,13 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = "https://eccepyzumrnjfwoljajb.supabase.co";
-const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjY2VweXp1bXJuamZ3b2xqYWpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyMzYzMDcsImV4cCI6MjA5NDgxMjMwN30.U34MJs-Ut_Z3CgxzmJ5QNXSRjpfCvM5LcHPVA8M16Pw";
+// Vem do .env (veja .env.example). Ter isso fixo no código impedia usar um
+// projeto Supabase de teste separado do de produção.
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-const supabase = createClient(
-  supabaseUrl,
-  supabaseKey
-);
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no arquivo .env (veja .env.example).");
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 export default supabase;
-
-
