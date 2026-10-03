@@ -211,7 +211,9 @@ begin
     raise exception 'Código de convite não encontrado ou inativo.';
   end if;
 
-  select count(*) into v_seats_used from public.profiles where company_id = v_company.id and company_role = 'collaborator';
+  -- "p." é obrigatório: sem ele, "company_id" fica ambíguo com a coluna de
+  -- retorno da função e o Postgres recusa (o convite nunca funcionava).
+  select count(*) into v_seats_used from public.profiles p where p.company_id = v_company.id and p.company_role = 'collaborator';
   if v_seats_used >= v_company.seats_limit then
     raise exception 'Essa empresa já atingiu o limite de % colaboradores.', v_company.seats_limit;
   end if;
@@ -977,3 +979,242 @@ alter table public.push_subscriptions enable row level security;
 drop policy if exists push_subscriptions_self on public.push_subscriptions;
 create policy push_subscriptions_self on public.push_subscriptions
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- =====================================================================
+-- FASE 0 — CORREÇÕES DE SEGURANÇA (03/10/2026)
+-- Testadas em supabase/tests (rode supabase/tests/run.sh).
+-- =====================================================================
+--
+-- Por que gatilhos e não "revoke update (coluna)": o Supabase dá
+-- "grant all" na tabela inteira para o papel authenticated, e no Postgres
+-- um revoke por coluna NÃO tem efeito quando existe grant na tabela.
+-- Ou seja, o revoke da seção de segurança anterior nunca funcionou: qualquer
+-- pessoa logada conseguia se promover a admin da plataforma. Os gatilhos
+-- abaixo valem independentemente dos grants.
+--
+-- Regra geral dos gatilhos: só se aplicam a chamadas vindas do app
+-- (current_user = authenticated/anon). Funções "security definer" do banco
+-- (redeem_license_key, set_collaborator_role...) e o SQL Editor rodam como
+-- dono das tabelas e continuam funcionando normalmente.
+
+create or replace function public.is_client_call()
+returns boolean language sql stable as $$
+  select current_user in ('authenticated', 'anon')
+$$;
+
+-- ---------------------------------------------------------------------
+-- PROFILES: ninguém altera o próprio papel, empresa ou supervisor
+-- ---------------------------------------------------------------------
+create or replace function public.guard_profiles()
+returns trigger language plpgsql as $$
+begin
+  if not public.is_client_call() or public.is_platform_admin() then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    if coalesce(new.is_platform_admin, false) or new.company_id is not null
+       or new.company_role is not null or new.supervised_by is not null then
+      raise exception 'Perfil novo não pode vir com papel, empresa ou supervisor.';
+    end if;
+  else
+    if new.is_platform_admin is distinct from old.is_platform_admin
+       or new.company_id is distinct from old.company_id
+       or new.company_role is distinct from old.company_role
+       or new.supervised_by is distinct from old.supervised_by then
+      raise exception 'Papel, empresa e supervisor só mudam pelas funções do sistema.';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_guard_profiles on public.profiles;
+create trigger trg_guard_profiles before insert or update on public.profiles
+  for each row execute function public.guard_profiles();
+
+-- Perfis não são apagados pelo app (remover colaborador = desvincular,
+-- via remove_collaborator). As policies "for all" antigas permitiam delete.
+drop policy if exists profiles_self on public.profiles;
+drop policy if exists profiles_self_select on public.profiles;
+create policy profiles_self_select on public.profiles
+  for select using (id = auth.uid());
+drop policy if exists profiles_self_insert on public.profiles;
+create policy profiles_self_insert on public.profiles
+  for insert with check (id = auth.uid());
+drop policy if exists profiles_self_update on public.profiles;
+create policy profiles_self_update on public.profiles
+  for update using (id = auth.uid()) with check (id = auth.uid());
+
+drop policy if exists profiles_company_admin_scope on public.profiles;
+drop policy if exists profiles_company_admin_select on public.profiles;
+create policy profiles_company_admin_select on public.profiles
+  for select using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin');
+drop policy if exists profiles_company_admin_update on public.profiles;
+create policy profiles_company_admin_update on public.profiles
+  for update using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+  with check (company_id = public.my_company_id() and public.my_company_role() = 'company_admin');
+
+-- ---------------------------------------------------------------------
+-- COMPANIES: licença (vagas, status, chaves) só muda pela plataforma
+-- ---------------------------------------------------------------------
+create or replace function public.guard_companies()
+returns trigger language plpgsql as $$
+begin
+  if not public.is_client_call() or public.is_platform_admin() then
+    return new;
+  end if;
+  if new.seats_limit is distinct from old.seats_limit
+     or new.status is distinct from old.status
+     or new.license_key is distinct from old.license_key
+     or new.collaborator_invite_code is distinct from old.collaborator_invite_code
+     or new.notes is distinct from old.notes then
+    raise exception 'Somente a plataforma altera dados da licença.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_guard_companies on public.companies;
+create trigger trg_guard_companies before update on public.companies
+  for each row execute function public.guard_companies();
+
+drop policy if exists companies_self_update_name on public.companies;
+create policy companies_self_update_name on public.companies
+  for update using (id = public.my_company_id() and public.my_company_role() = 'company_admin')
+  with check (id = public.my_company_id() and public.my_company_role() = 'company_admin');
+
+-- ---------------------------------------------------------------------
+-- ASSIGNMENTS: motoboy vê e atualiza só as próprias, e só o status
+-- ---------------------------------------------------------------------
+drop policy if exists assignments_company_scope on public.assignments;
+
+drop policy if exists assignments_platform_all on public.assignments;
+create policy assignments_platform_all on public.assignments
+  for all using (public.is_platform_admin()) with check (public.is_platform_admin());
+
+drop policy if exists assignments_admin_scope on public.assignments;
+create policy assignments_admin_scope on public.assignments
+  for all using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+  with check (company_id = public.my_company_id() and public.my_company_role() = 'company_admin');
+
+drop policy if exists assignments_supervisor_scope on public.assignments;
+create policy assignments_supervisor_scope on public.assignments
+  for all using (
+    company_id = public.my_company_id()
+    and collaborator_id in (select public.my_supervised_ids())
+  )
+  with check (
+    company_id = public.my_company_id()
+    and collaborator_id in (select public.my_supervised_ids())
+  );
+
+drop policy if exists assignments_collaborator_select on public.assignments;
+create policy assignments_collaborator_select on public.assignments
+  for select using (collaborator_id = auth.uid());
+
+drop policy if exists assignments_collaborator_update on public.assignments;
+create policy assignments_collaborator_update on public.assignments
+  for update using (collaborator_id = auth.uid()) with check (collaborator_id = auth.uid());
+
+create or replace function public.guard_assignments_collaborator()
+returns trigger language plpgsql as $$
+begin
+  if not public.is_client_call() or public.is_platform_admin()
+     or public.my_company_role() in ('company_admin', 'supervisor') then
+    return new;
+  end if;
+  -- Daqui pra baixo: é o próprio motoboy mexendo na designação dele.
+  if (to_jsonb(new) - array['status', 'started_at', 'completed_at'])
+     is distinct from (to_jsonb(old) - array['status', 'started_at', 'completed_at']) then
+    raise exception 'O colaborador só pode atualizar o andamento do atendimento.';
+  end if;
+  if new.status is distinct from old.status and not (
+       (old.status = 'scheduled' and new.status in ('en_route', 'in_progress'))
+    or (old.status = 'en_route' and new.status = 'in_progress')
+    or (old.status = 'in_progress' and new.status = 'completed')
+  ) then
+    raise exception 'Mudança de status não permitida: % → %.', old.status, new.status;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_guard_assignments_collaborator on public.assignments;
+create trigger trg_guard_assignments_collaborator before update on public.assignments
+  for each row execute function public.guard_assignments_collaborator();
+
+-- ---------------------------------------------------------------------
+-- SERVICES: toda a empresa lê o catálogo; só o admin altera
+-- ---------------------------------------------------------------------
+drop policy if exists services_company_scope on public.services;
+drop policy if exists services_company_read on public.services;
+create policy services_company_read on public.services
+  for select using (company_id = public.my_company_id() or public.is_platform_admin());
+drop policy if exists services_admin_write on public.services;
+create policy services_admin_write on public.services
+  for all using (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  )
+  with check (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  );
+
+-- ---------------------------------------------------------------------
+-- CHAVES DE API E CRM: só o admin da empresa (e a plataforma)
+-- ---------------------------------------------------------------------
+drop policy if exists api_keys_company_scope on public.api_keys;
+create policy api_keys_company_scope on public.api_keys
+  for all using (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  )
+  with check (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  );
+
+drop policy if exists crm_integrations_company_scope on public.crm_integrations;
+create policy crm_integrations_company_scope on public.crm_integrations
+  for all using (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  )
+  with check (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  );
+
+-- ---------------------------------------------------------------------
+-- FOTOS: quem enxerga a designação enxerga as fotos dela (a consulta em
+-- assignments já passa pelas policies acima, então motoboy só vê as dele
+-- e supervisor só as da equipe).
+-- ---------------------------------------------------------------------
+drop policy if exists assignment_photos_company_scope on public.assignment_photos;
+create policy assignment_photos_company_scope on public.assignment_photos
+  for all using (
+    exists (select 1 from public.assignments a where a.id = assignment_id)
+    and (company_id = public.my_company_id() or public.is_platform_admin())
+  )
+  with check (
+    exists (select 1 from public.assignments a where a.id = assignment_id)
+    and (company_id = public.my_company_id() or public.is_platform_admin())
+  );
+
+drop policy if exists assignment_photos_storage_access on storage.objects;
+create policy assignment_photos_storage_access on storage.objects
+  for all using (
+    bucket_id = 'assignment-photos'
+    and exists (
+      select 1 from public.assignments a
+      where a.id::text = (storage.foldername(name))[1]
+    )
+  )
+  with check (
+    bucket_id = 'assignment-photos'
+    and exists (
+      select 1 from public.assignments a
+      where a.id::text = (storage.foldername(name))[1]
+    )
+  );
