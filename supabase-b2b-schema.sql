@@ -1218,3 +1218,645 @@ create policy assignment_photos_storage_access on storage.objects
       where a.id::text = (storage.foldername(name))[1]
     )
   );
+
+-- =====================================================================
+-- FASE 1 — ENTREGAS (pedidos, fila, bairros, saídas com várias paradas,
+-- código de finalização, histórico de posições)
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- Liberações por empresa
+-- feature_delivery_code / feature_branding: só a plataforma liga
+-- strict_route_mode / off_route_meters: o admin da empresa escolhe
+-- ---------------------------------------------------------------------
+alter table public.companies add column if not exists feature_delivery_code boolean not null default false;
+alter table public.companies add column if not exists feature_branding boolean not null default false;
+alter table public.companies add column if not exists strict_route_mode boolean not null default false;
+alter table public.companies add column if not exists off_route_meters integer not null default 250
+  check (off_route_meters between 50 and 5000);
+alter table public.companies add column if not exists next_order_number integer not null default 1;
+
+create or replace function public.guard_companies()
+returns trigger language plpgsql as $$
+begin
+  if not public.is_client_call() or public.is_platform_admin() then
+    return new;
+  end if;
+  if new.seats_limit is distinct from old.seats_limit
+     or new.status is distinct from old.status
+     or new.license_key is distinct from old.license_key
+     or new.collaborator_invite_code is distinct from old.collaborator_invite_code
+     or new.notes is distinct from old.notes
+     or new.feature_delivery_code is distinct from old.feature_delivery_code
+     or new.feature_branding is distinct from old.feature_branding
+     or new.next_order_number is distinct from old.next_order_number then
+    raise exception 'Somente a plataforma altera dados da licença e as liberações.';
+  end if;
+  return new;
+end;
+$$;
+
+-- Gestores de pedidos: admin da empresa e supervisor (despachante).
+create or replace function public.is_order_manager()
+returns boolean language sql stable security definer as $$
+  select coalesce((select company_role in ('company_admin', 'supervisor')
+                   from public.profiles where id = auth.uid()), false)
+$$;
+
+-- ---------------------------------------------------------------------
+-- Bairros / zonas de entrega (taxa e tempo estimado)
+-- ---------------------------------------------------------------------
+create table if not exists public.delivery_zones (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  name text not null,
+  fee numeric(10,2) not null default 0,
+  eta_minutes integer,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (company_id, name)
+);
+alter table public.delivery_zones enable row level security;
+
+drop policy if exists delivery_zones_read on public.delivery_zones;
+create policy delivery_zones_read on public.delivery_zones
+  for select using (company_id = public.my_company_id() or public.is_platform_admin());
+drop policy if exists delivery_zones_write on public.delivery_zones;
+create policy delivery_zones_write on public.delivery_zones
+  for all using (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  )
+  with check (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  );
+
+-- ---------------------------------------------------------------------
+-- Clientes finais (endereço salvo para pedidos repetidos)
+-- ---------------------------------------------------------------------
+create table if not exists public.customers (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  name text not null,
+  phone text,
+  address_street text,
+  address_number text,
+  address_complement text,
+  address_neighborhood text,
+  address_city text,
+  lat double precision,
+  lng double precision,
+  notes text,
+  created_at timestamptz not null default now()
+);
+create index if not exists customers_company_phone_idx on public.customers(company_id, phone);
+alter table public.customers enable row level security;
+
+drop policy if exists customers_managers on public.customers;
+create policy customers_managers on public.customers
+  for all using (
+    (company_id = public.my_company_id() and public.is_order_manager())
+    or public.is_platform_admin()
+  )
+  with check (
+    (company_id = public.my_company_id() and public.is_order_manager())
+    or public.is_platform_admin()
+  );
+
+-- ---------------------------------------------------------------------
+-- Saídas do motoboy (uma saída = uma ou mais paradas)
+-- ---------------------------------------------------------------------
+create table if not exists public.delivery_runs (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  courier_id uuid not null references public.profiles(id),
+  status text not null default 'planned'
+    check (status in ('planned', 'in_progress', 'finished', 'cancelled')),
+  strict_route boolean not null default false,
+  created_by uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);
+create index if not exists delivery_runs_company_idx on public.delivery_runs(company_id, created_at desc);
+create index if not exists delivery_runs_courier_idx on public.delivery_runs(courier_id, status);
+alter table public.delivery_runs enable row level security;
+
+-- Escrita só pelas funções abaixo (dispatch_run, start_run...). O app lê.
+drop policy if exists delivery_runs_read on public.delivery_runs;
+create policy delivery_runs_read on public.delivery_runs
+  for select using (
+    courier_id = auth.uid()
+    or (company_id = public.my_company_id() and public.is_order_manager())
+    or public.is_platform_admin()
+  );
+
+-- ---------------------------------------------------------------------
+-- Pedidos
+-- Fila: received → preparing → ready → on_route → delivered
+--       (+ cancelled, problem)
+-- ---------------------------------------------------------------------
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  number integer,
+  source text not null default 'balcao'
+    check (source in ('balcao', 'telefone', 'whatsapp', 'ifood', 'outro')),
+  customer_id uuid references public.customers(id) on delete set null,
+  customer_name text not null,
+  customer_phone text,
+  address_street text,
+  address_number text,
+  address_complement text,
+  address_neighborhood text,
+  address_city text,
+  lat double precision,
+  lng double precision,
+  zone_id uuid references public.delivery_zones(id) on delete set null,
+  items text,
+  subtotal numeric(10,2) not null default 0,
+  delivery_fee numeric(10,2),
+  total numeric(10,2) generated always as (subtotal + coalesce(delivery_fee, 0)) stored,
+  payment_method text check (payment_method in ('dinheiro', 'cartao', 'pix', 'online')),
+  change_for numeric(10,2),
+  notes text,
+  status text not null default 'received'
+    check (status in ('received', 'preparing', 'ready', 'on_route', 'delivered', 'cancelled', 'problem')),
+  problem_reason text,
+  run_id uuid references public.delivery_runs(id) on delete set null,
+  stop_sequence integer,
+  courier_id uuid references public.profiles(id),
+  route_choice smallint check (route_choice between 0 and 2),
+  delivered_lat double precision,
+  delivered_lng double precision,
+  delivered_by_code boolean,
+  forced_reason text,
+  created_by uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  ready_at timestamptz,
+  dispatched_at timestamptz,
+  delivered_at timestamptz,
+  unique (company_id, number)
+);
+create index if not exists orders_company_status_idx on public.orders(company_id, status, created_at desc);
+create index if not exists orders_run_idx on public.orders(run_id, stop_sequence);
+create index if not exists orders_courier_idx on public.orders(courier_id, status);
+alter table public.orders enable row level security;
+
+drop policy if exists orders_managers on public.orders;
+create policy orders_managers on public.orders
+  for all using (
+    (company_id = public.my_company_id() and public.is_order_manager())
+    or public.is_platform_admin()
+  )
+  with check (
+    (company_id = public.my_company_id() and public.is_order_manager())
+    or public.is_platform_admin()
+  );
+
+-- Motoboy só lê os pedidos que estão com ele. Não escreve direto: tudo
+-- passa pelas funções start_run / complete_delivery / report_problem.
+drop policy if exists orders_courier_read on public.orders;
+create policy orders_courier_read on public.orders
+  for select using (courier_id = auth.uid());
+
+-- Número sequencial por empresa, bairro → zona e taxa automática.
+create or replace function public.orders_before_insert()
+returns trigger language plpgsql security definer as $$
+declare
+  v_zone record;
+begin
+  update public.companies set next_order_number = next_order_number + 1
+    where id = new.company_id returning next_order_number - 1 into new.number;
+
+  if new.zone_id is null and new.address_neighborhood is not null then
+    select id into new.zone_id from public.delivery_zones
+      where company_id = new.company_id and active
+        and lower(unaccent_simple(name)) = lower(unaccent_simple(new.address_neighborhood))
+      limit 1;
+  end if;
+  if new.delivery_fee is null and new.zone_id is not null then
+    select fee into new.delivery_fee from public.delivery_zones where id = new.zone_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Separado do gatilho acima porque precisa rodar SEM security definer:
+-- só assim is_client_call() enxerga que a chamada veio do app.
+create or replace function public.orders_sanitize_insert()
+returns trigger language plpgsql as $$
+begin
+  -- Campos de entrega nunca vêm preenchidos do app na criação.
+  if public.is_client_call() and not public.is_platform_admin() then
+    new.status := case when new.status in ('received', 'preparing', 'ready') then new.status else 'received' end;
+    new.run_id := null; new.courier_id := null; new.stop_sequence := null;
+    new.delivered_at := null; new.dispatched_at := null; new.forced_reason := null;
+    new.delivered_by_code := null; new.route_choice := null;
+    new.created_by := auth.uid();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_orders_sanitize_insert on public.orders;
+create trigger trg_orders_sanitize_insert before insert on public.orders
+  for each row execute function public.orders_sanitize_insert();
+
+-- Remove acentos sem depender da extensão unaccent.
+create or replace function public.unaccent_simple(t text)
+returns text language sql immutable as $$
+  select translate(coalesce(t, ''),
+    'áàâãäéèêëíìîïóòôõöúùûüçÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇ',
+    'aaaaaeeeeiiiiooooouuuucAAAAAEEEEIIIIOOOOOUUUUC')
+$$;
+
+drop trigger if exists trg_orders_before_insert on public.orders;
+create trigger trg_orders_before_insert before insert on public.orders
+  for each row execute function public.orders_before_insert();
+
+-- Pelo app, gestor só move o pedido na fila (recebido/preparo/pronto) ou
+-- cancela. Saída, entrega e "forçar entrega" passam pelas funções, que
+-- registram quem fez e quando.
+create or replace function public.guard_orders()
+returns trigger language plpgsql as $$
+begin
+  if not public.is_client_call() or public.is_platform_admin() then
+    return new;
+  end if;
+  if new.number is distinct from old.number
+     or new.company_id is distinct from old.company_id
+     or new.run_id is distinct from old.run_id
+     or new.courier_id is distinct from old.courier_id
+     or new.stop_sequence is distinct from old.stop_sequence
+     or new.delivered_at is distinct from old.delivered_at
+     or new.delivered_by_code is distinct from old.delivered_by_code
+     or new.forced_reason is distinct from old.forced_reason then
+    raise exception 'Use as funções de despacho/entrega para alterar estes campos.';
+  end if;
+  if new.status is distinct from old.status then
+    if old.status in ('delivered', 'cancelled') then
+      raise exception 'Pedido já encerrado.';
+    end if;
+    if new.status not in ('received', 'preparing', 'ready', 'cancelled') then
+      raise exception 'Use as funções de despacho/entrega para mudar para %.', new.status;
+    end if;
+    if old.run_id is not null then
+      raise exception 'Pedido está numa saída de motoboy; tire-o da saída primeiro.';
+    end if;
+    if new.status = 'ready' and new.ready_at is null then new.ready_at := now(); end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_guard_orders on public.orders;
+create trigger trg_guard_orders before update on public.orders
+  for each row execute function public.guard_orders();
+
+-- ---------------------------------------------------------------------
+-- Código de finalização (tabela separada: o motoboy não consegue ler)
+-- ---------------------------------------------------------------------
+create table if not exists public.order_delivery_codes (
+  order_id uuid primary key references public.orders(id) on delete cascade,
+  company_id uuid not null references public.companies(id) on delete cascade,
+  code text not null,
+  failed_attempts integer not null default 0,
+  locked boolean not null default false,
+  created_at timestamptz not null default now()
+);
+alter table public.order_delivery_codes enable row level security;
+
+drop policy if exists order_delivery_codes_managers on public.order_delivery_codes;
+create policy order_delivery_codes_managers on public.order_delivery_codes
+  for select using (
+    (company_id = public.my_company_id() and public.is_order_manager())
+    or public.is_platform_admin()
+  );
+
+create or replace function public.orders_after_insert()
+returns trigger language plpgsql security definer as $$
+begin
+  insert into public.order_delivery_codes (order_id, company_id, code)
+  values (new.id, new.company_id, lpad((floor(random() * 10000))::int::text, 4, '0'))
+  on conflict (order_id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_orders_after_insert on public.orders;
+create trigger trg_orders_after_insert after insert on public.orders
+  for each row execute function public.orders_after_insert();
+
+-- Liberar também o código: o admin precisa vê-lo para mandar ao cliente.
+-- (Desbloqueia a parada travada por tentativas erradas.)
+create or replace function public.unlock_delivery_code(p_order_id uuid)
+returns void language plpgsql security definer as $$
+begin
+  if not exists (select 1 from public.orders o where o.id = p_order_id
+                 and o.company_id = public.my_company_id() and public.is_order_manager()) then
+    raise exception 'Pedido não encontrado.';
+  end if;
+  update public.order_delivery_codes set locked = false, failed_attempts = 0 where order_id = p_order_id;
+end;
+$$;
+grant execute on function public.unlock_delivery_code(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Despacho: cria uma saída com as paradas na ordem informada
+-- ---------------------------------------------------------------------
+create or replace function public.notify_company_managers(p_company uuid, p_type text, p_title text, p_message text)
+returns void language sql security definer as $$
+  insert into public.notifications (company_id, user_id, type, title, message)
+  select p_company, p.id, p_type, p_title, p_message
+  from public.profiles p
+  where p.company_id = p_company and p.company_role in ('company_admin', 'supervisor');
+$$;
+revoke execute on function public.notify_company_managers(uuid, text, text, text) from public, anon, authenticated;
+
+create or replace function public.check_courier(p_courier uuid)
+returns void language plpgsql security definer as $$
+begin
+  if not exists (
+    select 1 from public.profiles p
+    where p.id = p_courier and p.company_id = public.my_company_id()
+      and p.company_role = 'collaborator'
+      and (public.my_company_role() = 'company_admin' or p.supervised_by = auth.uid())
+  ) then
+    raise exception 'Motoboy inválido para esta empresa.';
+  end if;
+end;
+$$;
+revoke execute on function public.check_courier(uuid) from public, anon, authenticated;
+
+create or replace function public.dispatch_run(p_courier uuid, p_order_ids uuid[])
+returns uuid language plpgsql security definer as $$
+declare
+  v_company uuid := public.my_company_id();
+  v_run uuid;
+  v_strict boolean;
+  i int;
+begin
+  if not public.is_order_manager() then raise exception 'Sem permissão para despachar.'; end if;
+  if coalesce(array_length(p_order_ids, 1), 0) = 0 then raise exception 'Escolha ao menos um pedido.'; end if;
+  perform public.check_courier(p_courier);
+
+  if (select count(*) from public.orders o
+      where o.id = any(p_order_ids) and o.company_id = v_company
+        and o.status in ('received', 'preparing', 'ready') and o.run_id is null)
+     <> array_length(p_order_ids, 1) then
+    raise exception 'Algum pedido não está disponível para despacho.';
+  end if;
+
+  select strict_route_mode into v_strict from public.companies where id = v_company;
+  insert into public.delivery_runs (company_id, courier_id, created_by, strict_route)
+    values (v_company, p_courier, auth.uid(), v_strict) returning id into v_run;
+
+  for i in 1 .. array_length(p_order_ids, 1) loop
+    update public.orders set run_id = v_run, courier_id = p_courier, stop_sequence = i
+      where id = p_order_ids[i];
+  end loop;
+
+  insert into public.notifications (company_id, user_id, type, title, message)
+    values (v_company, p_courier, 'new_run', 'Nova saída de entrega',
+            array_length(p_order_ids, 1) || ' parada(s) aguardando você.');
+  return v_run;
+end;
+$$;
+grant execute on function public.dispatch_run(uuid, uuid[]) to authenticated;
+
+-- Reorganiza uma saída ainda não encerrada: nova lista/ordem de paradas
+-- (pedidos tirados voltam para a fila) e, opcionalmente, outro motoboy.
+-- Paradas já entregues continuam na saída.
+create or replace function public.update_run(p_run uuid, p_order_ids uuid[], p_courier uuid default null)
+returns void language plpgsql security definer as $$
+declare
+  v_run record;
+  v_seq int := 0;
+  v_id uuid;
+begin
+  if not public.is_order_manager() then raise exception 'Sem permissão.'; end if;
+  select * into v_run from public.delivery_runs where id = p_run and company_id = public.my_company_id();
+  if v_run.id is null or v_run.status in ('finished', 'cancelled') then
+    raise exception 'Saída não encontrada ou já encerrada.';
+  end if;
+  if p_courier is not null and p_courier <> v_run.courier_id then
+    perform public.check_courier(p_courier);
+    update public.delivery_runs set courier_id = p_courier where id = p_run;
+    v_run.courier_id := p_courier;
+  end if;
+
+  -- Tira da saída o que não está mais na lista (e não foi entregue).
+  update public.orders
+    set run_id = null, courier_id = null, stop_sequence = null,
+        status = case when status in ('on_route', 'problem') then 'ready' else status end,
+        dispatched_at = null
+    where run_id = p_run and status not in ('delivered', 'cancelled')
+      and not (id = any(coalesce(p_order_ids, '{}')));
+
+  -- Entregues ficam primeiro, na ordem em que foram entregues.
+  for v_id in select id from public.orders where run_id = p_run and status = 'delivered' order by delivered_at loop
+    v_seq := v_seq + 1;
+    update public.orders set stop_sequence = v_seq where id = v_id;
+  end loop;
+
+  foreach v_id in array coalesce(p_order_ids, '{}') loop
+    if exists (select 1 from public.orders where id = v_id and status = 'delivered' and run_id = p_run) then
+      continue;
+    end if;
+    if not exists (select 1 from public.orders where id = v_id and company_id = v_run.company_id
+                   and status in ('received', 'preparing', 'ready', 'on_route', 'problem')
+                   and (run_id is null or run_id = p_run)) then
+      raise exception 'Pedido indisponível para esta saída.';
+    end if;
+    v_seq := v_seq + 1;
+    update public.orders set run_id = p_run, courier_id = v_run.courier_id, stop_sequence = v_seq,
+      status = case when v_run.status = 'in_progress' then 'on_route' else status end,
+      dispatched_at = case when v_run.status = 'in_progress' then coalesce(dispatched_at, now()) else dispatched_at end
+      where id = v_id;
+  end loop;
+
+  if v_seq = 0 then
+    update public.delivery_runs set status = 'cancelled', finished_at = now() where id = p_run;
+  else
+    perform public.maybe_finish_run(p_run);
+  end if;
+end;
+$$;
+grant execute on function public.update_run(uuid, uuid[], uuid) to authenticated;
+
+create or replace function public.maybe_finish_run(p_run uuid)
+returns void language plpgsql security definer as $$
+begin
+  if exists (select 1 from public.delivery_runs where id = p_run and status = 'in_progress')
+     and not exists (select 1 from public.orders where run_id = p_run and status not in ('delivered', 'cancelled')) then
+    update public.delivery_runs set status = 'finished', finished_at = now() where id = p_run;
+  end if;
+end;
+$$;
+revoke execute on function public.maybe_finish_run(uuid) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- Ações do motoboy
+-- ---------------------------------------------------------------------
+create or replace function public.start_run(p_run uuid)
+returns void language plpgsql security definer as $$
+begin
+  update public.delivery_runs set status = 'in_progress', started_at = now()
+    where id = p_run and courier_id = auth.uid() and status = 'planned';
+  if not found then raise exception 'Saída não encontrada ou já iniciada.'; end if;
+  update public.orders set status = 'on_route', dispatched_at = now()
+    where run_id = p_run and status in ('received', 'preparing', 'ready');
+end;
+$$;
+grant execute on function public.start_run(uuid) to authenticated;
+
+-- Escolha entre as 3 rotas (0 = principal). Bloqueada no modo rota exata.
+create or replace function public.choose_route(p_order_id uuid, p_choice smallint)
+returns void language plpgsql security definer as $$
+declare v_strict boolean;
+begin
+  select r.strict_route into v_strict from public.orders o join public.delivery_runs r on r.id = o.run_id
+    where o.id = p_order_id and o.courier_id = auth.uid();
+  if v_strict is null then raise exception 'Pedido não encontrado.'; end if;
+  if v_strict and p_choice <> 0 then raise exception 'Esta empresa exige seguir a rota definida.'; end if;
+  update public.orders set route_choice = p_choice where id = p_order_id;
+end;
+$$;
+grant execute on function public.choose_route(uuid, smallint) to authenticated;
+
+create or replace function public.complete_delivery(p_order_id uuid, p_code text default null,
+                                                    p_lat double precision default null, p_lng double precision default null)
+returns text language plpgsql security definer as $$
+declare
+  v_order record;
+  v_needs_code boolean;
+  v_code record;
+begin
+  select o.*, c.feature_delivery_code into v_order
+    from public.orders o join public.companies c on c.id = o.company_id
+    where o.id = p_order_id and o.courier_id = auth.uid();
+  if v_order.id is null then raise exception 'Pedido não encontrado.'; end if;
+  if v_order.status <> 'on_route' then raise exception 'Este pedido não está em rota.'; end if;
+
+  v_needs_code := v_order.feature_delivery_code;
+  if v_needs_code then
+    select * into v_code from public.order_delivery_codes where order_id = p_order_id for update;
+    if v_code.locked then
+      return 'locked';
+    end if;
+    if p_code is null or btrim(p_code) <> v_code.code then
+      update public.order_delivery_codes
+        set failed_attempts = failed_attempts + 1, locked = failed_attempts + 1 >= 5
+        where order_id = p_order_id;
+      if v_code.failed_attempts + 1 >= 5 then
+        perform public.notify_company_managers(v_order.company_id, 'delivery_code_locked',
+          'Código de entrega bloqueado',
+          'Pedido #' || v_order.number || ': 5 tentativas erradas. Libere ou finalize manualmente.');
+        return 'locked';
+      end if;
+      return 'wrong_code';
+    end if;
+  end if;
+
+  update public.orders set status = 'delivered', delivered_at = now(),
+    delivered_lat = p_lat, delivered_lng = p_lng, delivered_by_code = v_needs_code
+    where id = p_order_id;
+  perform public.maybe_finish_run(v_order.run_id);
+  return 'ok';
+end;
+$$;
+grant execute on function public.complete_delivery(uuid, text, double precision, double precision) to authenticated;
+
+create or replace function public.report_problem(p_order_id uuid, p_reason text)
+returns void language plpgsql security definer as $$
+declare v_order record;
+begin
+  if coalesce(btrim(p_reason), '') = '' then raise exception 'Informe o motivo.'; end if;
+  update public.orders set status = 'problem', problem_reason = p_reason
+    where id = p_order_id and courier_id = auth.uid() and status = 'on_route'
+    returning * into v_order;
+  if v_order.id is null then raise exception 'Pedido não encontrado ou não está em rota.'; end if;
+  perform public.notify_company_managers(v_order.company_id, 'delivery_problem',
+    'Problema na entrega', 'Pedido #' || v_order.number || ': ' || p_reason);
+end;
+$$;
+grant execute on function public.report_problem(uuid, text) to authenticated;
+
+-- Exceção: cliente sem código. Só gestor, com motivo, fica na auditoria.
+create or replace function public.force_complete_delivery(p_order_id uuid, p_reason text)
+returns void language plpgsql security definer as $$
+declare v_order record;
+begin
+  if not public.is_order_manager() then raise exception 'Sem permissão.'; end if;
+  if coalesce(btrim(p_reason), '') = '' then raise exception 'O motivo é obrigatório.'; end if;
+  update public.orders set status = 'delivered', delivered_at = now(), delivered_by_code = false,
+    forced_reason = p_reason
+    where id = p_order_id and company_id = public.my_company_id() and status in ('on_route', 'problem')
+    returning * into v_order;
+  if v_order.id is null then raise exception 'Pedido não encontrado ou não está em rota.'; end if;
+  perform public.log_audit(v_order.company_id, 'delivery_forced',
+    jsonb_build_object('order_id', p_order_id, 'number', v_order.number, 'reason', p_reason, 'by', auth.uid()));
+  perform public.maybe_finish_run(v_order.run_id);
+end;
+$$;
+grant execute on function public.force_complete_delivery(uuid, text) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Histórico de posições do motoboy
+-- ---------------------------------------------------------------------
+create table if not exists public.location_pings (
+  id bigint generated always as identity primary key,
+  company_id uuid not null references public.companies(id) on delete cascade,
+  courier_id uuid not null references public.profiles(id) on delete cascade,
+  run_id uuid references public.delivery_runs(id) on delete set null,
+  lat double precision not null,
+  lng double precision not null,
+  accuracy real,
+  speed real,
+  off_route boolean not null default false,
+  recorded_at timestamptz not null default now()
+);
+create index if not exists location_pings_courier_idx on public.location_pings(courier_id, recorded_at desc);
+create index if not exists location_pings_run_idx on public.location_pings(run_id, recorded_at);
+alter table public.location_pings enable row level security;
+
+drop policy if exists location_pings_insert_own on public.location_pings;
+create policy location_pings_insert_own on public.location_pings
+  for insert with check (
+    courier_id = auth.uid() and company_id = public.my_company_id()
+    and (run_id is null or exists (select 1 from public.delivery_runs r where r.id = run_id and r.courier_id = auth.uid()))
+  );
+drop policy if exists location_pings_read on public.location_pings;
+create policy location_pings_read on public.location_pings
+  for select using (
+    courier_id = auth.uid()
+    or (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or courier_id in (select public.my_supervised_ids())
+    or public.is_platform_admin()
+  );
+
+-- Apaga histórico antigo. Agende no Supabase (Database → Cron):
+--   select public.purge_location_pings(90);  -- diariamente
+create or replace function public.purge_location_pings(p_days integer default 90)
+returns integer language sql security definer as $$
+  with d as (delete from public.location_pings where recorded_at < now() - make_interval(days => p_days) returning 1)
+  select count(*)::int from d
+$$;
+revoke execute on function public.purge_location_pings(integer) from public, anon, authenticated;
+
+-- Tempo real para a fila, saídas e mapa ao vivo.
+do $$
+declare t text;
+begin
+  foreach t in array array['orders', 'delivery_runs', 'location_pings'] loop
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
+    ) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end $$;

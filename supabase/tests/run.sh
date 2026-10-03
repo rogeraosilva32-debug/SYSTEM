@@ -10,7 +10,12 @@ sudo -u postgres createdb "$DB"
 $PSQL -d "$DB" -f supabase/tests/00_stub_supabase.sql >/dev/null
 $PSQL -d "$DB" -f supabase-b2b-schema.sql >/dev/null 2>&1 || { echo "Erro aplicando o schema:"; $PSQL -d "$DB" -f supabase-b2b-schema.sql; exit 1; }
 $PSQL -d "$DB" -f supabase/tests/10_seed.sql >/dev/null
-out=$(sudo -u postgres psql -X -q -d "$DB" -f supabase/tests/20_permissoes.sql 2>&1 | grep -oE '(PASSOU|FALHOU).*')
+out=""
+for f in supabase/tests/2*.sql; do
+  # Erro inesperado (fora dos testes) também conta como falha.
+  out+=$(sudo -u postgres psql -X -q -d "$DB" -f "$f" 2>&1 | grep -oE '(PASSOU|FALHOU).*|ERROR:.*' | sed -E "s/^ERROR:/FALHOU erro inesperado em $(basename "$f"):/")$'\n'
+done
+out=$(echo "$out" | grep .)
 echo "$out"
 total=$(echo "$out" | grep -c . || true); falhas=$(echo "$out" | grep -c '^FALHOU' || true)
 echo "---- $((total - falhas))/$total passaram"
