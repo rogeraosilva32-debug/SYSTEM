@@ -3,10 +3,14 @@ import { Box, Table, TableHead, TableRow, TableCell, TableBody, CircularProgress
 import AppShell from "../components/AppShell";
 import { AssignmentsTab } from "./company/AssignmentsTab";
 import { MessagesTab } from "./company/MessagesTab";
+import { OrdersTab } from "./company/OrdersTab";
+import { LiveMapTab } from "./company/LiveMapTab";
 import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
 
 const TABS = [
+  { key: "orders", label: "Pedidos" },
+  { key: "live", label: "Mapa ao vivo" },
   { key: "team", label: "Minha equipe" },
   { key: "assignments", label: "Designações" },
   { key: "messages", label: "Mensagens" },
@@ -44,7 +48,7 @@ function MyTeam({ myId }) {
 
 export default function SupervisorDashboard() {
   const { profile } = useAuth();
-  const [tab, setTab] = useState("team");
+  const [tab, setTab] = useState("orders");
 
   return (
     <AppShell title="Supervisão">
@@ -63,6 +67,8 @@ export default function SupervisorDashboard() {
         ))}
       </Box>
 
+      {tab === "orders" && <OrdersTab />}
+      {tab === "live" && <LiveMapTab />}
       {tab === "team" && <MyTeam myId={profile.id} />}
       {tab === "assignments" && <AssignmentsTab />}
       {tab === "messages" && <MessagesTab />}

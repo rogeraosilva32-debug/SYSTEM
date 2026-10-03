@@ -1860,3 +1860,45 @@ begin
     end if;
   end loop;
 end $$;
+
+-- Desvio de rota numa saída de entrega: avisa os gestores, no máximo uma
+-- vez a cada 5 minutos por saída (o app chama a cada episódio de desvio).
+alter table public.delivery_runs add column if not exists last_off_route_at timestamptz;
+
+create or replace function public.notify_run_off_route(p_run uuid, p_meters integer default null)
+returns void language plpgsql security definer as $$
+declare v_run record;
+begin
+  select r.*, p.name as courier_name into v_run
+    from public.delivery_runs r join public.profiles p on p.id = r.courier_id
+    where r.id = p_run and r.courier_id = auth.uid() and r.status = 'in_progress';
+  if v_run.id is null then raise exception 'Saída não encontrada.'; end if;
+  if v_run.last_off_route_at is not null and v_run.last_off_route_at > now() - interval '5 minutes' then
+    return;
+  end if;
+  update public.delivery_runs set last_off_route_at = now() where id = p_run;
+  perform public.notify_company_managers(v_run.company_id, 'off_route',
+    case when v_run.strict_route then 'Desvio de rota (rota exata)' else 'Desvio de rota' end,
+    v_run.courier_name || ' saiu do trajeto' || coalesce(' (' || p_meters || ' m)', '') || '.');
+end;
+$$;
+grant execute on function public.notify_run_off_route(uuid, integer) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Leitura da própria empresa: só o admin lê a linha inteira (que tem a
+-- chave de licença e o código de convite). Antes, qualquer colaborador
+-- lia a chave de licença e podia resgatá-la para virar admin da empresa.
+-- Os demais leem só os ajustes de que precisam, por esta função.
+-- ---------------------------------------------------------------------
+drop policy if exists companies_self_read on public.companies;
+create policy companies_self_read on public.companies
+  for select using (id = public.my_company_id() and public.my_company_role() = 'company_admin');
+
+create or replace function public.my_company_settings()
+returns table(id uuid, name text, status text, feature_delivery_code boolean, feature_branding boolean,
+              strict_route_mode boolean, off_route_meters integer)
+language sql stable security definer as $$
+  select c.id, c.name, c.status, c.feature_delivery_code, c.feature_branding, c.strict_route_mode, c.off_route_meters
+  from public.companies c where c.id = public.my_company_id()
+$$;
+grant execute on function public.my_company_settings() to authenticated;

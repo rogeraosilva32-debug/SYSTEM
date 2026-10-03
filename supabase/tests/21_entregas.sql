@@ -61,6 +61,8 @@ select start_run(:'run');
 select tests.ok('iniciar saída põe pedidos em rota', (select count(*) from orders where status = 'on_route') = 2);
 select tests.bloqueado('rota exata: não escolhe rota alternativa', format($q$select choose_route(%L, 1::smallint)$q$, :'o2'));
 select tests.permitido('rota exata: rota principal ok', format($q$select choose_route(%L, 0::smallint)$q$, :'o2'));
+select notify_run_off_route(:'run', 400);
+select notify_run_off_route(:'run', 450);
 select tests.ok('sem código de entrega ligado, finaliza sem código', complete_delivery(:'o2') = 'ok');
 select tests.as_user('00000000-0000-0000-0000-0000000000c2');
 select tests.bloqueado('outro motoboy não finaliza', format($q$select complete_delivery(%L)$q$, :'o1'));
@@ -89,6 +91,7 @@ select code as cod3 from order_delivery_codes where order_id = :'o3' \gset
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
 select tests.ok('bloqueado: nem o código certo passa', complete_delivery(:'o3', :'cod3') = 'locked');
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
+select tests.ok('desvio avisa o admin só uma vez a cada 5 min', (select count(*) from notifications where type = 'off_route') = 1);
 select tests.ok('admin é avisado do bloqueio', (select count(*) from notifications where type = 'delivery_code_locked') = 1);
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
 select report_problem(:'o3', 'Cliente não atende');

@@ -63,6 +63,14 @@ select tests.permitido('plataforma altera limite de vagas', $q$update companies 
 select tests.permitido('plataforma suspende empresa', $q$update companies set status = 'suspended' where id = 'aaaaaaaa-0000-0000-0000-000000000000'$q$);
 rollback;
 
+begin; select tests.as_user('00000000-0000-0000-0000-0000000000c1');
+select tests.ok('motoboy não lê a chave de licença da empresa', (select count(*) from companies) = 0);
+select tests.ok('motoboy lê os ajustes da empresa pela função', (select name from my_company_settings()) = 'Empresa A');
+rollback;
+begin; select tests.as_user('00000000-0000-0000-0000-0000000000a1');
+select tests.ok('admin lê a própria empresa', (select count(*) from companies) = 1);
+rollback;
+
 -- ---------------- Pedidos/designações ----------------
 begin; select tests.as_user('00000000-0000-0000-0000-0000000000c1');
 select tests.ok('motoboy só vê as próprias designações', (select count(*) from assignments) = 1);

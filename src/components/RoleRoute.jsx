@@ -2,7 +2,7 @@ import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ProfileLoadFallback from "./ProfileLoadFallback";
 
-const HOME_BY_ROLE = { platform: "/plataforma", company_admin: "/painel", collaborator: "/tarefas", supervisor: "/supervisao" };
+const HOME_BY_ROLE = { platform: "/plataforma", company_admin: "/painel", collaborator: "/entregas", supervisor: "/supervisao" };
 
 function homeForCurrentUser({ isPlatformAdmin, isCompanyAdmin, isCollaborator, isSupervisor }) {
   if (isPlatformAdmin) return HOME_BY_ROLE.platform;

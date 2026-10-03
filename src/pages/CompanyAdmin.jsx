@@ -5,21 +5,27 @@ import { CollaboratorsTab, ServicesTab } from "./company/CollaboratorsAndService
 import { AssignmentsTab } from "./company/AssignmentsTab";
 import { IntegrationsTab } from "./company/IntegrationsTab";
 import { MessagesTab } from "./company/MessagesTab";
+import { OrdersTab } from "./company/OrdersTab";
+import { LiveMapTab } from "./company/LiveMapTab";
+import { DeliverySettingsTab } from "./company/DeliverySettingsTab";
 import AuditLogViewer from "../components/AuditLogViewer";
 import { useAuth } from "../context/AuthContext";
 
 const TABS = [
+  { key: "orders", label: "Pedidos" },
+  { key: "live", label: "Mapa ao vivo" },
   { key: "collaborators", label: "Colaboradores" },
   { key: "services", label: "Serviços" },
   { key: "assignments", label: "Designações" },
   { key: "messages", label: "Mensagens" },
+  { key: "delivery", label: "Entregas: ajustes" },
   { key: "integrations", label: "Integrações & API" },
   { key: "audit", label: "Auditoria" },
 ];
 
 export default function CompanyAdmin() {
   const { companyId } = useAuth();
-  const [tab, setTab] = useState("collaborators");
+  const [tab, setTab] = useState("orders");
 
   return (
     <AppShell title="Painel da empresa">
@@ -39,6 +45,9 @@ export default function CompanyAdmin() {
         ))}
       </Box>
 
+      {tab === "orders" && <OrdersTab />}
+      {tab === "live" && <LiveMapTab />}
+      {tab === "delivery" && <DeliverySettingsTab />}
       {tab === "collaborators" && <CollaboratorsTab />}
       {tab === "services" && <ServicesTab />}
       {tab === "assignments" && <AssignmentsTab />}
