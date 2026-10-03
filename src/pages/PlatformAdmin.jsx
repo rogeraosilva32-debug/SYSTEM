@@ -1,0 +1,335 @@
+import { useState, useEffect, useCallback } from "react";
+import {
+  Box, Typography, Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
+  Table, TableHead, TableRow, TableCell, TableBody, Chip, IconButton, CircularProgress,
+  Tooltip, Switch, FormControlLabel,
+} from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import CloseIcon from "@mui/icons-material/Close";
+import supabase from "../services/supabase";
+import AppShell from "../components/AppShell";
+import RouteMap from "../components/RouteMap";
+import AuditLogViewer from "../components/AuditLogViewer";
+import InfoField from "../components/InfoField";
+import { generateCode } from "../utils/codeGenerator";
+
+function copyToClipboard(text) {
+  navigator.clipboard?.writeText(text).catch(() => {});
+}
+
+function NewCompanyDialog({ open, onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [seats, setSeats] = useState(5);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleCreate = async () => {
+    if (!name.trim()) { setError("Informe o nome da empresa."); return; }
+    setSaving(true);
+    setError("");
+    const { data, error: insertError } = await supabase
+      .from("companies")
+      .insert({
+        name: name.trim(),
+        seats_limit: Number(seats) || 1,
+        license_key: generateCode(),
+        collaborator_invite_code: generateCode(),
+      })
+      .select("*")
+      .single();
+    setSaving(false);
+    if (insertError) { setError(insertError.message); return; }
+    setName(""); setSeats(5);
+    onCreated(data);
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontWeight: 800 }}>Nova empresa</DialogTitle>
+      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
+        <TextField
+          label="Nome da empresa" value={name} fullWidth
+          onChange={(e) => { setName(e.target.value); setError(""); }}
+          error={!!error} helperText={error}
+        />
+        <TextField
+          label="Limite de colaboradores" type="number" value={seats} fullWidth
+          onChange={(e) => setSeats(e.target.value)}
+          inputProps={{ min: 1 }}
+        />
+      </DialogContent>
+      <DialogActions sx={{ p: 2.5, pt: 0 }}>
+        <Button onClick={onClose} sx={{ color: "#78716C" }}>Cancelar</Button>
+        <Button onClick={handleCreate} disabled={saving} variant="contained">
+          {saving ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : "Criar"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function CompanyDetail({ company, onBack, onUpdated }) {
+  const [tab, setTab] = useState("collaborators");
+  const [collaborators, setCollaborators] = useState(null);
+  const [services, setServices] = useState(null);
+  const [assignments, setAssignments] = useState(null);
+  const [seatsInput, setSeatsInput] = useState(company.seats_limit);
+  const [savingSeats, setSavingSeats] = useState(false);
+  const [detail, setDetail] = useState(null);
+
+  const load = useCallback(async () => {
+    const [c, s, a] = await Promise.all([
+      supabase.from("profiles").select("*").eq("company_id", company.id).eq("company_role", "collaborator"),
+      supabase.from("services").select("*").eq("company_id", company.id),
+      supabase.from("assignments").select("*, service:service_id(name), collaborator:collaborator_id(name)").eq("company_id", company.id).order("scheduled_start", { ascending: false }).limit(50),
+    ]);
+    setCollaborators(c.data || []);
+    setServices(s.data || []);
+    setAssignments(a.data || []);
+  }, [company.id]);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { load(); }, [load]);
+
+  const toggleStatus = async () => {
+    const nextStatus = company.status === "active" ? "suspended" : "active";
+    const { data, error } = await supabase.from("companies").update({ status: nextStatus }).eq("id", company.id).select("*").single();
+    if (!error) onUpdated(data);
+  };
+
+  const saveSeats = async () => {
+    setSavingSeats(true);
+    const { data, error } = await supabase.from("companies").update({ seats_limit: Number(seatsInput) || 1 }).eq("id", company.id).select("*").single();
+    setSavingSeats(false);
+    if (!error) onUpdated(data);
+  };
+
+  const regenerateInvite = async () => {
+    const { data, error } = await supabase.from("companies").update({ collaborator_invite_code: generateCode() }).eq("id", company.id).select("*").single();
+    if (!error) onUpdated(data);
+  };
+
+  return (
+    <Box>
+      <Button startIcon={<ArrowBackIcon />} onClick={onBack} sx={{ color: "#57534E", mb: 2, textTransform: "none", fontWeight: 700 }}>
+        Todas as empresas
+      </Button>
+
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 2, mb: 3 }}>
+        <Box>
+          <Typography sx={{ fontWeight: 800, fontSize: 22, color: "#1C1917" }}>{company.name}</Typography>
+          <Chip
+            label={company.status === "active" ? "Ativa" : "Suspensa"} size="small"
+            sx={{
+              mt: 0.5, height: 22, fontSize: 11, fontWeight: 700,
+              background: company.status === "active" ? "#EEF3EF" : "#F6EBEA",
+              color: company.status === "active" ? "#4B7A5E" : "#B0463D",
+            }}
+          />
+        </Box>
+        <FormControlLabel
+          control={<Switch checked={company.status === "active"} onChange={toggleStatus} />}
+          label={<Typography sx={{ fontSize: 13, fontWeight: 600, color: "#57534E" }}>Empresa ativa</Typography>}
+        />
+      </Box>
+
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 2, mb: 3 }}>
+        <Box sx={{ border: "1px solid #E7E5E4", borderRadius: "14px", p: 2.5, background: "#fff" }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#78716C", mb: 1 }}>CHAVE DE LICENÇA</Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography sx={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700 }}>{company.license_key}</Typography>
+            <Tooltip title="Copiar">
+              <IconButton size="small" onClick={() => copyToClipboard(company.license_key)}><ContentCopyIcon sx={{ fontSize: 15 }} /></IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+        <Box sx={{ border: "1px solid #E7E5E4", borderRadius: "14px", p: 2.5, background: "#fff" }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#78716C", mb: 1 }}>CÓDIGO DE CONVITE (COLABORADORES)</Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography sx={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700 }}>{company.collaborator_invite_code}</Typography>
+            <Tooltip title="Copiar">
+              <IconButton size="small" onClick={() => copyToClipboard(company.collaborator_invite_code)}><ContentCopyIcon sx={{ fontSize: 15 }} /></IconButton>
+            </Tooltip>
+            <Tooltip title="Gerar novo código">
+              <IconButton size="small" onClick={regenerateInvite}><RefreshIcon sx={{ fontSize: 15 }} /></IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+      </Box>
+
+      <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1.5, mb: 3 }}>
+        <TextField
+          label="Limite de colaboradores" type="number" size="small"
+          value={seatsInput} onChange={(e) => setSeatsInput(e.target.value)}
+          sx={{ width: 200 }}
+        />
+        <Button onClick={saveSeats} disabled={savingSeats} variant="outlined" sx={{ height: 40 }}>
+          {savingSeats ? <CircularProgress size={16} /> : "Salvar"}
+        </Button>
+        <Typography sx={{ fontSize: 12.5, color: "#78716C", ml: 1 }}>
+          {collaborators?.length ?? "…"} de {company.seats_limit} vagas usadas
+        </Typography>
+      </Box>
+
+      <Box sx={{ display: "flex", gap: 0.5, mb: 2, borderBottom: "1px solid #E7E5E4" }}>
+        {[
+          { key: "collaborators", label: `Colaboradores (${collaborators?.length ?? "…"})` },
+          { key: "services", label: `Serviços (${services?.length ?? "…"})` },
+          { key: "assignments", label: `Designações (${assignments?.length ?? "…"})` },
+          { key: "audit", label: "Auditoria" },
+        ].map((t) => (
+          <Box key={t.key} onClick={() => setTab(t.key)} sx={{
+            px: 2, py: 1.2, cursor: "pointer", fontSize: 13, fontWeight: 700,
+            color: tab === t.key ? "#1C1917" : "#A8A29E",
+            borderBottom: tab === t.key ? "2px solid #1C1917" : "2px solid transparent",
+          }}>
+            {t.label}
+          </Box>
+        ))}
+      </Box>
+
+      {tab === "collaborators" && (
+        <Table size="small">
+          <TableHead><TableRow><TableCell>Nome</TableCell><TableCell>E-mail</TableCell><TableCell>Telefone</TableCell></TableRow></TableHead>
+          <TableBody>
+            {(collaborators || []).map((c) => (
+              <TableRow key={c.id}><TableCell>{c.name}</TableCell><TableCell>{c.email}</TableCell><TableCell>{c.phone || "—"}</TableCell></TableRow>
+            ))}
+            {collaborators?.length === 0 && <TableRow><TableCell colSpan={3} sx={{ color: "#A8A29E", textAlign: "center", py: 3 }}>Nenhum colaborador ainda.</TableCell></TableRow>}
+          </TableBody>
+        </Table>
+      )}
+
+      {tab === "services" && (
+        <Table size="small">
+          <TableHead><TableRow><TableCell>Nome</TableCell><TableCell>Duração padrão</TableCell><TableCell>Preço</TableCell></TableRow></TableHead>
+          <TableBody>
+            {(services || []).map((s) => (
+              <TableRow key={s.id}><TableCell>{s.name}</TableCell><TableCell>{s.default_duration_minutes} min</TableCell><TableCell>{s.price ? `R$ ${Number(s.price).toFixed(2)}` : "—"}</TableCell></TableRow>
+            ))}
+            {services?.length === 0 && <TableRow><TableCell colSpan={3} sx={{ color: "#A8A29E", textAlign: "center", py: 3 }}>Nenhum serviço cadastrado ainda.</TableCell></TableRow>}
+          </TableBody>
+        </Table>
+      )}
+
+      {tab === "assignments" && (
+        <Table size="small">
+          <TableHead><TableRow><TableCell>Serviço</TableCell><TableCell>Início</TableCell><TableCell>Status</TableCell></TableRow></TableHead>
+          <TableBody>
+            {(assignments || []).map((a) => (
+              <TableRow key={a.id} hover onClick={() => setDetail(a)} sx={{ cursor: "pointer" }}>
+                <TableCell>{a.service?.name || "—"}</TableCell>
+                <TableCell>{new Date(a.scheduled_start).toLocaleString("pt-BR")}</TableCell>
+                <TableCell>{a.status}</TableCell>
+              </TableRow>
+            ))}
+            {assignments?.length === 0 && <TableRow><TableCell colSpan={3} sx={{ color: "#A8A29E", textAlign: "center", py: 3 }}>Nenhuma designação ainda.</TableCell></TableRow>}
+          </TableBody>
+        </Table>
+      )}
+
+      {tab === "audit" && <AuditLogViewer companyId={company.id} />}
+
+      <Dialog open={!!detail} onClose={() => setDetail(null)} maxWidth="sm" fullWidth>
+        {detail && (
+          <>
+            <DialogTitle sx={{ fontWeight: 800, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              {detail.service?.name}
+              <IconButton onClick={() => setDetail(null)} size="small"><CloseIcon fontSize="small" /></IconButton>
+            </DialogTitle>
+            <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+                <InfoField label="Colaborador" value={detail.collaborator?.name || "—"} />
+                <InfoField label="Cliente" value={detail.customer_name || "Não informado"} />
+                <InfoField label="Início" value={new Date(detail.scheduled_start).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })} />
+                <InfoField label="Duração" value={`${detail.duration_minutes} min`} />
+              </Box>
+              <RouteMap
+                lat={detail.lat} lng={detail.lng}
+                address={[detail.address_street, detail.address_neighborhood, detail.address_city].filter(Boolean).join(", ")}
+                trackCollaboratorId={detail.status === "in_progress" ? detail.collaborator_id : null}
+              />
+              {detail.notes && <Typography sx={{ fontSize: 12.5, color: "#78716C", fontStyle: "italic" }}>{detail.notes}</Typography>}
+            </DialogContent>
+          </>
+        )}
+      </Dialog>
+    </Box>
+  );
+}
+
+export default function PlatformAdmin() {
+  const [companies, setCompanies] = useState(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selected, setSelected] = useState(null);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("companies").select("*").order("created_at", { ascending: false });
+    setCompanies(data || []);
+  }, []);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { load(); }, [load]);
+
+  const handleUpdated = (updated) => {
+    setSelected(updated);
+    setCompanies((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+  };
+
+  return (
+    <AppShell
+      title="Empresas licenciadas"
+      actions={!selected && (
+        <Button startIcon={<AddIcon />} variant="contained" onClick={() => setDialogOpen(true)} sx={{ borderRadius: "10px" }}>
+          Nova empresa
+        </Button>
+      )}
+    >
+      {selected ? (
+        <CompanyDetail company={selected} onBack={() => setSelected(null)} onUpdated={handleUpdated} />
+      ) : companies === null ? (
+        <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>
+      ) : companies.length === 0 ? (
+        <Box sx={{ py: 8, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>
+          Nenhuma empresa cadastrada ainda. Clique em "Nova empresa" pra começar.
+        </Box>
+      ) : (
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Empresa</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell>Vagas</TableCell>
+              <TableCell>Criada em</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {companies.map((c) => (
+              <TableRow key={c.id} hover onClick={() => setSelected(c)} sx={{ cursor: "pointer" }}>
+                <TableCell sx={{ fontWeight: 600 }}>{c.name}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={c.status === "active" ? "Ativa" : "Suspensa"} size="small"
+                    sx={{
+                      height: 22, fontSize: 11, fontWeight: 700,
+                      background: c.status === "active" ? "#EEF3EF" : "#F6EBEA",
+                      color: c.status === "active" ? "#4B7A5E" : "#B0463D",
+                    }}
+                  />
+                </TableCell>
+                <TableCell>{c.seats_limit}</TableCell>
+                <TableCell>{new Date(c.created_at).toLocaleDateString("pt-BR")}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <NewCompanyDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onCreated={(c) => setCompanies((prev) => [c, ...prev])} />
+    </AppShell>
+  );
+}
