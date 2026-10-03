@@ -108,6 +108,12 @@ function CompanyDetail({ company, onBack, onUpdated }) {
     if (!error) onUpdated(data);
   };
 
+  // Recursos que só a plataforma libera, por empresa.
+  const toggleFeature = async (column, value) => {
+    const { data, error } = await supabase.from("companies").update({ [column]: value }).eq("id", company.id).select("*").single();
+    if (!error) onUpdated(data);
+  };
+
   const regenerateInvite = async () => {
     const { data, error } = await supabase.from("companies").update({ collaborator_invite_code: generateCode() }).eq("id", company.id).select("*").single();
     if (!error) onUpdated(data);
@@ -159,6 +165,22 @@ function CompanyDetail({ company, onBack, onUpdated }) {
             </Tooltip>
           </Box>
         </Box>
+      </Box>
+
+      <Box sx={{ border: "1px solid #E7E5E4", borderRadius: "14px", p: 2.5, background: "#fff", mb: 3 }}>
+        <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#78716C", mb: 1 }}>RECURSOS LIBERADOS PARA ESTA EMPRESA</Typography>
+        {[
+          { column: "feature_delivery_code", label: "Código de finalização de entrega", help: "A empresa envia um código ao cliente por WhatsApp; o motoboy só finaliza a entrega com ele." },
+          { column: "feature_branding", label: "Marca própria", help: "A empresa envia logo, ícone, imagens e cor para o sistema aparecer com a marca dela." },
+        ].map((f) => (
+          <Box key={f.column} sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, py: 0.8 }}>
+            <Box>
+              <Typography sx={{ fontWeight: 700, fontSize: 14 }}>{f.label}</Typography>
+              <Typography sx={{ fontSize: 12.5, color: "#78716C" }}>{f.help}</Typography>
+            </Box>
+            <Switch checked={Boolean(company[f.column])} onChange={(e) => toggleFeature(f.column, e.target.checked)} />
+          </Box>
+        ))}
       </Box>
 
       <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1.5, mb: 3 }}>

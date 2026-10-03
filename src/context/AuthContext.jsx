@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import supabase from "../services/supabase";
+import { clearCompanySettings } from "../hooks/useCompanySettings";
 
 const AuthContext = createContext(null);
 
@@ -126,6 +127,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
+    clearCompanySettings();
     setUser(null);
     setProfile(null);
   }, []);

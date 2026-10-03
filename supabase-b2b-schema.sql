@@ -1902,3 +1902,84 @@ language sql stable security definer as $$
   from public.companies c where c.id = public.my_company_id()
 $$;
 grant execute on function public.my_company_settings() to authenticated;
+
+-- =====================================================================
+-- MARCA PRÓPRIA (liberada pela plataforma em feature_branding)
+-- Imagens ficam no bucket público "company-branding", na pasta
+-- <company_id>/. Só o admin da empresa, com o recurso liberado, envia.
+-- =====================================================================
+alter table public.companies add column if not exists brand_color text
+  check (brand_color is null or brand_color ~ '^#[0-9A-Fa-f]{6}$');
+alter table public.companies add column if not exists brand_logo_url text;
+alter table public.companies add column if not exists brand_icon_url text;
+alter table public.companies add column if not exists brand_login_bg_url text;
+alter table public.companies add column if not exists brand_share_url text;
+
+create or replace function public.guard_company_branding()
+returns trigger language plpgsql as $$
+begin
+  if not public.is_client_call() or public.is_platform_admin() then
+    return new;
+  end if;
+  if not old.feature_branding and (
+       new.brand_color is distinct from old.brand_color
+    or new.brand_logo_url is distinct from old.brand_logo_url
+    or new.brand_icon_url is distinct from old.brand_icon_url
+    or new.brand_login_bg_url is distinct from old.brand_login_bg_url
+    or new.brand_share_url is distinct from old.brand_share_url) then
+    raise exception 'A marca própria não está liberada para esta empresa.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_guard_company_branding on public.companies;
+create trigger trg_guard_company_branding before update on public.companies
+  for each row execute function public.guard_company_branding();
+
+drop function if exists public.my_company_settings();
+create or replace function public.my_company_settings()
+returns table(id uuid, name text, status text, feature_delivery_code boolean, feature_branding boolean,
+              strict_route_mode boolean, off_route_meters integer,
+              brand_color text, brand_logo_url text, brand_icon_url text, brand_login_bg_url text, brand_share_url text)
+language sql stable security definer as $$
+  select c.id, c.name, c.status, c.feature_delivery_code, c.feature_branding, c.strict_route_mode, c.off_route_meters,
+         case when c.feature_branding then c.brand_color end,
+         case when c.feature_branding then c.brand_logo_url end,
+         case when c.feature_branding then c.brand_icon_url end,
+         case when c.feature_branding then c.brand_login_bg_url end,
+         case when c.feature_branding then c.brand_share_url end
+  from public.companies c where c.id = public.my_company_id()
+$$;
+grant execute on function public.my_company_settings() to authenticated;
+
+-- Marca na página pública de avaliação (cliente final, sem login).
+create or replace function public.get_rating_branding(p_token uuid)
+returns table(company_name text, brand_color text, brand_logo_url text, brand_share_url text)
+language sql stable security definer as $$
+  select c.name,
+         case when c.feature_branding then c.brand_color end,
+         case when c.feature_branding then c.brand_logo_url end,
+         case when c.feature_branding then c.brand_share_url end
+  from public.assignments a join public.companies c on c.id = a.company_id
+  where a.rating_token = p_token
+$$;
+grant execute on function public.get_rating_branding(uuid) to anon, authenticated;
+
+insert into storage.buckets (id, name, public) values ('company-branding', 'company-branding', true)
+  on conflict (id) do nothing;
+
+drop policy if exists company_branding_write on storage.objects;
+create policy company_branding_write on storage.objects
+  for all using (
+    bucket_id = 'company-branding'
+    and (storage.foldername(name))[1] = public.my_company_id()::text
+    and public.my_company_role() = 'company_admin'
+    and exists (select 1 from public.companies c where c.id = public.my_company_id() and c.feature_branding)
+  )
+  with check (
+    bucket_id = 'company-branding'
+    and (storage.foldername(name))[1] = public.my_company_id()::text
+    and public.my_company_role() = 'company_admin'
+    and exists (select 1 from public.companies c where c.id = public.my_company_id() and c.feature_branding)
+  );

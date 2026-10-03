@@ -15,12 +15,15 @@ export default function RatingPage() {
   const [feedback, setFeedback] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  const [brand, setBrand] = useState(null);
 
   useEffect(() => {
     supabase.rpc("get_rating_context", { p_token: token }).then(({ data, error: rpcError }) => {
       if (rpcError || !data?.length) { setError("Link inválido ou expirado."); return; }
       setContext(data[0]);
     });
+    // Marca da empresa (se liberada): logo, imagem e nome no topo.
+    supabase.rpc("get_rating_branding", { p_token: token }).then(({ data }) => setBrand(data?.[0] || null));
   }, [token]);
 
   const handleSubmit = async () => {
@@ -38,7 +41,16 @@ export default function RatingPage() {
   return (
     <Box sx={{ minHeight: "100vh", background: "#FAFAF9", display: "flex", alignItems: "center" }}>
       <Container maxWidth="xs">
-        <Box sx={{ background: "#fff", border: "1px solid #E7E5E4", borderRadius: "16px", p: 4, textAlign: "center" }}>
+        {brand?.brand_share_url && (
+          <Box component="img" src={brand.brand_share_url} alt="" sx={{ width: "100%", borderRadius: "16px", mb: 2, display: "block" }} />
+        )}
+        <Box sx={{ background: "#fff", border: "1px solid #E7E5E4", borderTop: brand?.brand_color ? `4px solid ${brand.brand_color}` : undefined, borderRadius: "16px", p: 4, textAlign: "center" }}>
+          {brand?.brand_logo_url && (
+            <Box component="img" src={brand.brand_logo_url} alt={brand.company_name} sx={{ height: 48, maxWidth: "70%", objectFit: "contain", mb: 2 }} />
+          )}
+          {brand?.company_name && !brand?.brand_logo_url && (
+            <Typography sx={{ fontWeight: 800, fontSize: 13, color: "#78716C", mb: 1 }}>{brand.company_name}</Typography>
+          )}
           {!context && !error && <CircularProgress size={26} />}
 
           {error && !context && (

@@ -491,3 +491,30 @@ src/
 supabase-b2b-schema.sql   schema completo (rodar primeiro; seguro rodar de novo)
 supabase/functions/        api-data, crm-import, send-push
 ```
+
+## 26. Entregas (Fase 1)
+
+- **Painel → Pedidos**: fila em tempo real (recebido, em preparo, pronto,
+  em rota, problema), novo pedido com cliente salvo pelo telefone e taxa
+  pelo bairro, despacho com várias paradas (agrupa por bairro e sugere a
+  ordem), editar saída (reordenar, tirar/pôr pedido, trocar motoboy).
+- **Painel → Mapa ao vivo**: motoboys, paradas e trajeto percorrido.
+- **Painel → Entregas: ajustes**: bairros e taxas, modo rota exata,
+  distância que conta como desvio.
+- **Motoboy → /entregas** (tela inicial do colaborador): iniciar saída,
+  3 opções de rota por trecho, Google Maps com todas as paradas, Waze
+  para a próxima, código de entrega, "tive um problema". Posição enviada a
+  cada 15 s durante a saída, com a tela mantida ligada.
+- **Plataforma → empresa → Recursos liberados**: código de finalização
+  de entrega e marca própria (só a plataforma liga).
+- **Painel → Marca** (quando liberada): logo, ícone, imagens e cor, com a
+  medida recomendada em cada campo e conferência antes de salvar.
+
+Limitação conhecida: no navegador (PWA) a posição só é enviada com o app
+aberto e a tela ligada. O app Android (Fase 2) resolve isso.
+
+Agendar no Supabase (Database → Cron), diariamente:
+`select public.purge_location_pings(90);` (apaga posições com mais de 90 dias).
+
+Testes: `supabase/tests/run.sh` (permissões e regras, banco local) e
+`supabase/tests/e2e/` (fluxo completo no navegador, veja o README de lá).

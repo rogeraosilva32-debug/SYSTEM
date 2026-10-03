@@ -5,6 +5,7 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 
 const SECRET = process.env.JWT_SECRET || "segredo-de-teste-local-com-32-caracteres!!";
 const DB = process.env.DB || "sistema_e2e";
@@ -59,6 +60,45 @@ http.createServer(async (req, res) => {
     r.headers.forEach((v, k) => { if (!["content-encoding", "transfer-encoding", "connection"].includes(k) && !k.startsWith("access-control-")) h[k] = v; });
     Object.assign(h, cors);
     res.writeHead(r.status, h); return res.end(out);
+  }
+  // Storage: o envio passa pela policy real (insere em storage.objects
+  // como o usuário logado); o arquivo fica em /tmp/mock-storage.
+  const up = url.pathname.match(/^\/storage\/v1\/object\/(?!public\/)([^/]+)\/(.+)$/);
+  if (up && req.method === "POST" || up && req.method === "PUT") {
+    const p = decode((req.headers.authorization || "").replace(/^Bearer /, ""));
+    const [, bucket, path] = up;
+    try {
+      const claims = JSON.stringify({ sub: p?.sub, role: "authenticated" }).replace(/'/g, "''");
+      execFileSync("sudo", ["-u", "postgres", "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", DB, "-c",
+        `begin; set local role authenticated; set local request.jwt.claims = '${claims}'; insert into storage.objects (bucket_id, name) values ('${bucket}', '${decodeURIComponent(path).replace(/'/g, "''")}'); commit;`], { stdio: "pipe" });
+    } catch (e) {
+      return send(res, 403, { statusCode: "403", error: "Unauthorized", message: "new row violates row-level security policy" });
+    }
+    const file = `/tmp/mock-storage/${bucket}/${decodeURIComponent(path)}`;
+    fs.mkdirSync(file.replace(/\/[^/]+$/, ""), { recursive: true });
+    // O supabase-js manda o arquivo como multipart (FormData): pega a parte
+    // que tem Content-Type de arquivo.
+    let bytes = body, type = req.headers["content-type"] || "application/octet-stream";
+    const boundary = type.match(/boundary=(.+)$/)?.[1];
+    if (boundary) {
+      for (const part of body.toString("latin1").split(`--${boundary}`)) {
+        const m = part.match(/Content-Type: ([^\r\n]+)\r\n\r\n/);
+        if (m) {
+          type = m[1];
+          bytes = Buffer.from(part.slice(part.indexOf("\r\n\r\n") + 4, -2), "latin1");
+        }
+      }
+    }
+    fs.writeFileSync(file, bytes);
+    fs.writeFileSync(file + ".type", type);
+    return send(res, 200, { Key: `${bucket}/${path}` });
+  }
+  const pub = url.pathname.match(/^\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
+  if (pub) {
+    const file = `/tmp/mock-storage/${pub[1]}/${decodeURIComponent(pub[2])}`;
+    if (!fs.existsSync(file)) return send(res, 404, { message: "not found" });
+    res.writeHead(200, { ...cors, "Content-Type": fs.readFileSync(file + ".type", "utf8") });
+    return res.end(fs.readFileSync(file));
   }
   if (url.pathname === "/auth/v1/token") {
     const data = JSON.parse(body.toString() || "{}");

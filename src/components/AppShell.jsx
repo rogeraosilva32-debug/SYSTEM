@@ -2,7 +2,9 @@ import { Box, Typography, IconButton, Avatar, Menu, MenuItem, Chip } from "@mui/
 import LogoutIcon from "@mui/icons-material/Logout";
 import NotificationsActiveOutlinedIcon from "@mui/icons-material/NotificationsActiveOutlined";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlineOutlined";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ThemeProvider, createTheme, useTheme } from "@mui/material/styles";
+import { useCompanySettings } from "../hooks/useCompanySettings";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import NotificationBell from "./NotificationBell";
@@ -24,6 +26,23 @@ export default function AppShell({ title, actions, children }) {
   const [anchorEl, setAnchorEl] = useState(null);
   const [pushMsg, setPushMsg] = useState("");
   const navigate = useNavigate();
+
+  // Marca própria da empresa (quando liberada pela plataforma): logo no
+  // cabeçalho, cor principal nos botões e ícone na aba do navegador.
+  const brand = useCompanySettings(Boolean(profile?.company_id));
+  const baseTheme = useTheme();
+  const brandColor = brand?.brand_color;
+  const theme = useMemo(() => (brandColor
+    ? createTheme(baseTheme, { palette: { primary: { main: brandColor, dark: brandColor, contrastText: "#FFFFFF" } } })
+    : baseTheme), [baseTheme, brandColor]);
+  useEffect(() => {
+    if (!brand?.brand_icon_url) return;
+    const link = document.querySelector("link[rel~='icon']");
+    if (!link) return;
+    const previous = link.href;
+    link.href = brand.brand_icon_url;
+    return () => { link.href = previous; };
+  }, [brand?.brand_icon_url]);
 
   const roleKey = isPlatformAdmin ? "platform" : isCompanyAdmin ? "company_admin" : isSupervisor ? "supervisor" : isCollaborator ? "collaborator" : null;
 
@@ -48,7 +67,11 @@ export default function AppShell({ title, actions, children }) {
         display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2,
       }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 800, fontSize: { xs: 16, sm: 18 }, color: "#1C1917", letterSpacing: "-0.01em", whiteSpace: "nowrap" }}>
+          {brand?.brand_logo_url && (
+            <Box component="img" src={brand.brand_logo_url} alt={brand.name}
+              sx={{ height: { xs: 24, sm: 34 }, maxWidth: { xs: 72, sm: 140 }, objectFit: "contain", flexShrink: 0 }} />
+          )}
+          <Typography sx={{ fontWeight: 800, fontSize: { xs: 16, sm: 18 }, color: "#1C1917", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
             {title}
           </Typography>
           {roleKey && (
@@ -95,7 +118,7 @@ export default function AppShell({ title, actions, children }) {
       </Box>
 
       <Box sx={{ px: { xs: 2, sm: 4 }, py: { xs: 3, sm: 4 }, maxWidth: 1100, mx: "auto" }}>
-        {children}
+        <ThemeProvider theme={theme}>{children}</ThemeProvider>
       </Box>
     </Box>
   );

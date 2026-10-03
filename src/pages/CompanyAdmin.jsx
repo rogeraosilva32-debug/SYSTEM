@@ -8,6 +8,8 @@ import { MessagesTab } from "./company/MessagesTab";
 import { OrdersTab } from "./company/OrdersTab";
 import { LiveMapTab } from "./company/LiveMapTab";
 import { DeliverySettingsTab } from "./company/DeliverySettingsTab";
+import { BrandingTab } from "./company/BrandingTab";
+import { useCompanySettings } from "../hooks/useCompanySettings";
 import AuditLogViewer from "../components/AuditLogViewer";
 import { useAuth } from "../context/AuthContext";
 
@@ -26,11 +28,14 @@ const TABS = [
 export default function CompanyAdmin() {
   const { companyId } = useAuth();
   const [tab, setTab] = useState("orders");
+  const settings = useCompanySettings();
+  // A aba de marca só aparece quando a plataforma liberou o recurso.
+  const tabs = settings?.feature_branding ? [...TABS.slice(0, -1), { key: "branding", label: "Marca" }, TABS[TABS.length - 1]] : TABS;
 
   return (
     <AppShell title="Painel da empresa">
       <Box sx={{ display: "flex", gap: 0.5, mb: 3, borderBottom: "1px solid #E7E5E4", overflowX: "auto" }}>
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <Box
             key={t.key}
             onClick={() => setTab(t.key)}
@@ -53,6 +58,7 @@ export default function CompanyAdmin() {
       {tab === "assignments" && <AssignmentsTab />}
       {tab === "messages" && <MessagesTab />}
       {tab === "integrations" && <IntegrationsTab />}
+      {tab === "branding" && <BrandingTab />}
       {tab === "audit" && <AuditLogViewer companyId={companyId} />}
     </AppShell>
   );
