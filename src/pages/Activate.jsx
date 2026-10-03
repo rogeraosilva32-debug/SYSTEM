@@ -27,7 +27,7 @@ function ActivateForm({ refreshProfile, logout, navigate }) {
   const [error, setError] = useState("");
 
   const handleActivate = async () => {
-    const value = code.trim();
+    const value = code.trim().toUpperCase();
     if (!value) { setError("Informe o código."); return; }
     setLoading(true);
     setError("");

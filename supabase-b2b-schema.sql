@@ -189,7 +189,8 @@ language plpgsql security definer as $$
 declare
   v_company record;
 begin
-  select id, name into v_company from public.companies where license_key = p_key and status = 'active';
+  select id, name into v_company from public.companies
+    where upper(btrim(license_key)) = upper(btrim(p_key)) and status = 'active';
   if v_company.id is null then
     raise exception 'Chave de licença não encontrada ou inativa.';
   end if;
@@ -206,7 +207,8 @@ declare
   v_company record;
   v_seats_used int;
 begin
-  select id, name, seats_limit into v_company from public.companies where collaborator_invite_code = p_code and status = 'active';
+  select id, name, seats_limit into v_company from public.companies
+    where upper(btrim(collaborator_invite_code)) = upper(btrim(p_code)) and status = 'active';
   if v_company.id is null then
     raise exception 'Código de convite não encontrado ou inativo.';
   end if;
