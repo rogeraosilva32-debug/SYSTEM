@@ -37,15 +37,46 @@ const cors = {
   "Access-Control-Allow-Headers": "authorization, content-type",
 };
 
+const json = (data: unknown, status = 200) =>
+  new Response(JSON.stringify(data), { status, headers: { ...cors, "Content-Type": "application/json" } });
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
 
   try {
-    const { user_id, title, message, url } = await req.json();
+    // Aceita tanto a chamada do app ({ user_id, title, ... }) quanto o
+    // formato fixo do Database Webhook do Supabase ({ type, table, record }).
+    const raw = await req.json();
+    const body = raw?.record ?? raw;
+    const user_id = body?.user_id;
+    let { title, message, url } = body ?? {};
     if (!user_id || !title) {
-      return new Response(JSON.stringify({ error: "Envie { user_id, title, message?, url? }." }), {
-        status: 400, headers: { ...cors, "Content-Type": "application/json" },
-      });
+      return json({ error: "Envie { user_id, title, message?, url? }." }, 400);
+    }
+
+    // Quem está chamando? Só o próprio banco (webhook com a service role)
+    // pode mandar texto livre. Do app, o texto é montado aqui no servidor e
+    // o destinatário precisa ser da mesma empresa: antes, qualquer pessoa
+    // logada mandava qualquer texto pra qualquer usuário de qualquer empresa.
+    const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
+    if (token !== SERVICE_ROLE_KEY) {
+      const { data: auth } = await admin.auth.getUser(token);
+      if (!auth?.user) return json({ error: "Não autenticado." }, 401);
+
+      const { data: people } = await admin.from("profiles")
+        .select("id, name, company_id, is_platform_admin")
+        .in("id", [auth.user.id, user_id]);
+      const caller = people?.find((p) => p.id === auth.user.id);
+      const target = people?.find((p) => p.id === user_id);
+      const sameCompany = caller?.company_id && caller.company_id === target?.company_id;
+      if (!target || !(sameCompany || caller?.is_platform_admin)) {
+        return json({ error: "Destinatário não permitido." }, 403);
+      }
+
+      title = "Nova mensagem";
+      message = `${caller?.name || "Alguém"} enviou uma mensagem.`;
+      // Só caminhos internos do próprio app (evita link para site externo).
+      url = typeof url === "string" && /^\/(?!\/)/.test(url) ? url : "/";
     }
 
     const { data: subs } = await admin.from("push_subscriptions").select("*").eq("user_id", user_id);
@@ -60,7 +91,7 @@ Deno.serve(async (req) => {
           payload
         );
         sent++;
-      } catch (err) {
+      } catch (err: any) {
         // Inscrição expirada/revogada pelo navegador — remove pra não
         // tentar de novo pra sempre em algo que nunca mais vai funcionar.
         if (err?.statusCode === 404 || err?.statusCode === 410) {

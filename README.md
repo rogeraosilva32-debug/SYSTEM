@@ -396,7 +396,15 @@ início/conclusão de atendimento, desvio de rota) — pra essas chegarem
 como push também, sem precisar mexer no código do app, configure um
 [Database Webhook](https://supabase.com/docs/guides/database/webhooks) no
 painel do Supabase: evento **INSERT** na tabela `notifications` → chama a
-Edge Function `send-push` com o corpo `{ "user_id": "{{ record.user_id }}", "title": "{{ record.title }}", "message": "{{ record.message }}" }`.
+Edge Function `send-push` (tipo "Supabase Edge Functions", método POST),
+**marcando a opção de enviar o cabeçalho de autorização com a service role**.
+A função lê `user_id`, `title` e `message` direto do `record` que o webhook
+manda. Sem esse cabeçalho a chamada é tratada como vinda do app e o texto
+é substituído (veja abaixo).
+
+**Segurança (Fase 0):** chamadas vindas do app só podem notificar alguém
+da mesma empresa, e o texto é montado pelo servidor ("Nova mensagem"),
+para ninguém conseguir mandar notificação falsa com texto próprio.
 
 **Nota técnica:** o PWA trocou de estratégia de service worker
 (`generateSW` → `injectManifest`) só por causa disso — precisava de um
