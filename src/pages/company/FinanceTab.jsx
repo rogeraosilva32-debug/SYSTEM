@@ -7,20 +7,17 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { money, PAYMENT_LABEL } from "../../utils/delivery";
-import { today, periodRange, formatDate, km, downloadCsv, CASH_KIND } from "../../utils/reports";
+import { today, periodRange, formatDate, km, downloadCsv, CASH_KIND, loadError } from "../../utils/reports";
 import { Stat, StatGrid, Section, BarList } from "../../components/ReportParts";
 
 const SUBTABS = [
   { key: "cash", label: "Caixa do dia" },
   { key: "settlements", label: "Acertos dos motoboys" },
   { key: "rates", label: "Valores do motoboy" },
-  { key: "shifts", label: "Turnos" },
-  { key: "license", label: "Licença" },
 ];
 
 const num = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
 const time = (iso) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-const dateTime = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 
 function useCouriers(companyId) {
   const [couriers, setCouriers] = useState([]);
@@ -46,7 +43,7 @@ function CashDay({ companyId }) {
 
   const load = useCallback(async () => {
     const { data: d, error: err } = await supabase.rpc("report_cash_day", { p_day: day });
-    if (err) { setError(err.message); return; }
+    if (err) { setError(loadError(err)); return; }
     setData(d);
     setSelected([]);
   }, [day]);
@@ -58,7 +55,7 @@ function CashDay({ companyId }) {
     setError("");
     if (num(amount) <= 0) { setError("Informe um valor."); return; }
     const { error: err } = await supabase.from("cash_movements").insert({ company_id: companyId, kind, amount: num(amount), note: note.trim() || null });
-    if (err) { setError(err.message); return; }
+    if (err) { setError(loadError(err)); return; }
     setAmount(""); setNote("");
     load();
   };
@@ -70,7 +67,7 @@ function CashDay({ companyId }) {
 
   const confirm = async (ids, received = true) => {
     const { error: err } = await supabase.rpc("confirm_payments", { p_order_ids: ids, p_received: received });
-    if (err) { setError(err.message); return; }
+    if (err) { setError(loadError(err)); return; }
     load();
   };
 
@@ -217,7 +214,7 @@ function Settlements({ companyId }) {
     setError(""); setPreview(null);
     if (!courier) { setError("Escolha o motoboy."); return; }
     const { data, error: err } = await supabase.rpc("preview_settlement", { p_courier: courier, p_from: range[0], p_to: range[1] });
-    if (err) { setError(err.message); return; }
+    if (err) { setError(loadError(err)); return; }
     setPreview(data);
   };
 
@@ -226,7 +223,7 @@ function Settlements({ companyId }) {
     const { error: err } = await supabase.rpc("create_settlement", {
       p_courier: courier, p_from: range[0], p_to: range[1], p_adjustment: num(adjustment), p_note: note,
     });
-    if (err) { setError(err.message); return; }
+    if (err) { setError(loadError(err)); return; }
     setPreview(null); setAdjustment(""); setNote("");
     setSaved("Acerto gravado."); setTimeout(() => setSaved(""), 2500);
     load();
@@ -235,7 +232,7 @@ function Settlements({ companyId }) {
   const act = async (fn, id) => {
     setError("");
     const { error: err } = await supabase.rpc(fn, { p_id: id });
-    if (err) { setError(err.message); return; }
+    if (err) { setError(loadError(err)); return; }
     load();
   };
 
@@ -343,6 +340,7 @@ function Rates({ companyId }) {
       supabase.from("companies").select("courier_daily_rate, courier_per_delivery, courier_per_km").eq("id", companyId).maybeSingle(),
       supabase.from("courier_rates").select("*").eq("company_id", companyId),
     ]);
+    if (c.error || r.error) { setMsg({ type: "error", text: loadError(c.error || r.error) }); setCompany(false); return; }
     setCompany(c.data);
     if (c.data) setForm({
       courier_daily_rate: c.data.courier_daily_rate, courier_per_delivery: c.data.courier_per_delivery, courier_per_km: c.data.courier_per_km,
@@ -357,7 +355,7 @@ function Rates({ companyId }) {
     const { error } = await supabase.from("companies").update({
       courier_daily_rate: num(form.courier_daily_rate), courier_per_delivery: num(form.courier_per_delivery), courier_per_km: num(form.courier_per_km),
     }).eq("id", companyId);
-    setMsg(error ? { type: "error", text: error.message } : { type: "success", text: "Valores padrão salvos." });
+    setMsg(error ? { type: "error", text: loadError(error) } : { type: "success", text: "Valores padrão salvos." });
     load();
   };
 
@@ -365,10 +363,11 @@ function Rates({ companyId }) {
     const current = rates[id] || {};
     const row = { courier_id: id, company_id: companyId, daily_rate: current.daily_rate ?? null, per_delivery: current.per_delivery ?? null, per_km: current.per_km ?? null, ...patch, updated_at: new Date().toISOString() };
     const { error } = await supabase.from("courier_rates").upsert(row);
-    if (error) setMsg({ type: "error", text: error.message });
+    if (error) setMsg({ type: "error", text: loadError(error) });
     load();
   };
 
+  if (company === false) return <Alert severity="error">{msg?.text}</Alert>;
   if (!company) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
 
   const field = (value) => (value === null || value === undefined ? "" : String(value));
@@ -411,107 +410,6 @@ function Rates({ companyId }) {
   );
 }
 
-// ---------------------------------------------------------------------
-// Turnos: histórico e encerramento de turno esquecido aberto.
-// ---------------------------------------------------------------------
-function Shifts({ companyId }) {
-  const [list, setList] = useState(null);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    const { data } = await supabase.from("courier_shifts").select("*, courier:courier_id(name)")
-      .eq("company_id", companyId).order("started_at", { ascending: false }).limit(100);
-    setList(data || []);
-  }, [companyId]);
-
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { load(); }, [load]);
-
-  const close = async (id) => {
-    const { error: err } = await supabase.rpc("end_shift", { p_shift: id });
-    if (err) { setError(err.message); return; }
-    load();
-  };
-
-  const hours = (s) => {
-    const ms = (s.ended_at ? new Date(s.ended_at) : new Date()) - new Date(s.started_at);
-    return `${Math.floor(ms / 3600000)} h ${Math.round((ms % 3600000) / 60000)} min`;
-  };
-
-  return (
-    <Section title="Turnos dos motoboys" onExport={() => downloadCsv("turnos.csv", [
-      { label: "Motoboy", value: (s) => s.courier?.name }, { label: "Início", value: (s) => dateTime(s.started_at) },
-      { label: "Fim", value: (s) => dateTime(s.ended_at) }, { label: "Duração", value: hours },
-      { label: "Km", value: (s) => (s.km === null ? "" : Number(s.km)) },
-    ], list || [])}>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      <Typography sx={{ fontSize: 12.5, color: "#78716C", mb: 1 }}>O motoboy inicia e encerra o turno na tela de entregas. Cada dia com turno conta uma diária.</Typography>
-      {list === null ? <CircularProgress size={20} /> : list.length === 0 ? (
-        <Typography sx={{ fontSize: 13, color: "#A8A29E" }}>Nenhum turno registrado.</Typography>
-      ) : (
-        <Box sx={{ overflowX: "auto" }}>
-          <Table size="small">
-            <TableHead><TableRow><TableCell>Motoboy</TableCell><TableCell>Início</TableCell><TableCell>Fim</TableCell><TableCell>Duração</TableCell><TableCell align="right">Km</TableCell><TableCell /></TableRow></TableHead>
-            <TableBody>
-              {list.map((s) => (
-                <TableRow key={s.id}>
-                  <TableCell sx={{ fontWeight: 600 }}>{s.courier?.name}</TableCell>
-                  <TableCell>{dateTime(s.started_at)}</TableCell>
-                  <TableCell>{s.ended_at ? dateTime(s.ended_at) : <Chip size="small" color="primary" label="Aberto" />}</TableCell>
-                  <TableCell>{hours(s)}</TableCell>
-                  <TableCell align="right">{s.km === null ? "—" : km(s.km)}</TableCell>
-                  <TableCell align="right">{!s.ended_at && <Button size="small" onClick={() => close(s.id)}>Encerrar</Button>}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Box>
-      )}
-    </Section>
-  );
-}
-
-// ---------------------------------------------------------------------
-// Licença: faturas que a plataforma emitiu para esta empresa.
-// ---------------------------------------------------------------------
-function License({ companyId }) {
-  const [list, setList] = useState(null);
-  useEffect(() => {
-    supabase.from("license_invoices").select("*").eq("company_id", companyId).order("reference_month", { ascending: false })
-      .then(({ data }) => setList(data || []));
-  }, [companyId]);
-
-  const statusChip = (i) => {
-    if (i.status === "paid") return <Chip size="small" color="success" variant="outlined" label={`Paga ${formatDate(i.paid_at)}`} />;
-    if (i.status === "cancelled") return <Chip size="small" variant="outlined" label="Cancelada" />;
-    if (i.due_date < today()) return <Chip size="small" color="error" variant="outlined" label="Vencida" />;
-    return <Chip size="small" color="warning" variant="outlined" label="A pagar" />;
-  };
-
-  return (
-    <Section title="Faturas da licença">
-      {list === null ? <CircularProgress size={20} /> : list.length === 0 ? (
-        <Typography sx={{ fontSize: 13, color: "#A8A29E" }}>Nenhuma fatura emitida.</Typography>
-      ) : (
-        <Table size="small">
-          <TableHead><TableRow><TableCell>Mês</TableCell><TableCell>Vencimento</TableCell><TableCell align="right">Valor</TableCell><TableCell>Situação</TableCell></TableRow></TableHead>
-          <TableBody>
-            {list.map((i) => (
-              <TableRow key={i.id}>
-                <TableCell>{formatDate(i.reference_month).slice(3)}</TableCell>
-                <TableCell>{formatDate(i.due_date)}</TableCell>
-                <TableCell align="right">{money(i.amount)}</TableCell>
-                <TableCell>{statusChip(i)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
-      <Typography sx={{ fontSize: 12, color: "#A8A29E", mt: 1 }}>Fatura vencida além da carência suspende o acesso da empresa. Dúvidas: fale com a plataforma.</Typography>
-    </Section>
-  );
-}
-
 export function FinanceTab() {
   const { companyId } = useAuth();
   const [sub, setSub] = useState("cash");
@@ -526,8 +424,6 @@ export function FinanceTab() {
       {sub === "cash" && <CashDay companyId={companyId} />}
       {sub === "settlements" && <Settlements companyId={companyId} />}
       {sub === "rates" && <Rates companyId={companyId} />}
-      {sub === "shifts" && <Shifts companyId={companyId} />}
-      {sub === "license" && <License companyId={companyId} />}
     </Box>
   );
 }

@@ -6,7 +6,7 @@ import { Stat, PeriodPicker } from "../components/ReportParts";
 import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
 import { money } from "../utils/delivery";
-import { periodRange, formatDate, km } from "../utils/reports";
+import { periodRange, formatDate, km, loadError } from "../utils/reports";
 
 // Ganhos do motoboy: prévia do período (mesmo cálculo do acerto) e
 // acertos já fechados pela empresa.
@@ -19,12 +19,12 @@ export default function CourierEarnings() {
 
   useEffect(() => {
     supabase.rpc("preview_settlement", { p_courier: profile.id, p_from: range[0], p_to: range[1] })
-      .then(({ data, error: err }) => { setError(err?.message || ""); setPreview(data); });
+      .then(({ data, error: err }) => { setError(err ? loadError(err) : ""); setPreview(data); });
   }, [profile.id, range]);
 
   useEffect(() => {
     supabase.from("settlements").select("*").eq("courier_id", profile.id).order("period_end", { ascending: false }).limit(50)
-      .then(({ data }) => setList(data || []));
+      .then(({ data, error: err }) => { if (err) setError(loadError(err)); setList(data || []); });
   }, [profile.id]);
 
   return (
@@ -32,7 +32,7 @@ export default function CourierEarnings() {
       <CollaboratorNav />
       <PeriodPicker value={range} onChange={setRange} />
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      {!preview ? <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box> : (
+      {error ? null : !preview ? <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box> : (
         <>
           <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, 1fr)" }, gap: 1.5, mb: 1 }}>
             <Stat label="Previsto no período" value={money(preview.total)} tone="good" />
@@ -41,7 +41,7 @@ export default function CourierEarnings() {
             <Stat label={`Km (${km(preview.km)})`} value={money(preview.km_total)} />
           </Box>
           <Typography sx={{ fontSize: 12, color: "#A8A29E", mb: 3 }}>
-            Prévia calculada com os valores da empresa. O valor final é o do acerto que a empresa fecha.
+            Diária conta cada dia com entrega feita. Prévia calculada com os valores da empresa. O valor final é o do acerto que a empresa fecha.
             Dinheiro de clientes com você no período: {money(preview.cash_collected)}.
           </Typography>
         </>

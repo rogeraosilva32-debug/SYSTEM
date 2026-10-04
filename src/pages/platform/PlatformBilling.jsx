@@ -216,6 +216,46 @@ export function CompanyBilling({ company, onUpdated }) {
           onChange={(e) => setForm({ ...form, grace_days: e.target.value })} />
         <Button variant="outlined" onClick={save}>Salvar</Button>
       </Box>
+      <CompanyInvoices companyId={company.id} />
+    </Box>
+  );
+}
+
+// Faturas da licença desta empresa (só a plataforma vê).
+function CompanyInvoices({ companyId }) {
+  const [list, setList] = useState(null);
+  useEffect(() => {
+    supabase.from("license_invoices").select("*").eq("company_id", companyId).order("reference_month", { ascending: false }).limit(24)
+      .then(({ data }) => setList(data || []));
+  }, [companyId]);
+
+  const statusChip = (i) => {
+    if (i.status === "paid") return <Chip size="small" color="success" variant="outlined" label={`Paga ${formatDate(i.paid_at)}`} />;
+    if (i.status === "cancelled") return <Chip size="small" variant="outlined" label="Cancelada" />;
+    if (i.due_date < today()) return <Chip size="small" color="error" variant="outlined" label="Vencida" />;
+    return <Chip size="small" color="warning" variant="outlined" label="A pagar" />;
+  };
+
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#78716C", mb: 1 }}>FATURAS DESTA EMPRESA</Typography>
+      {list === null ? <CircularProgress size={18} /> : list.length === 0 ? (
+        <Typography sx={{ fontSize: 13, color: "#A8A29E" }}>Nenhuma fatura emitida. Gere em "Faturas", no topo.</Typography>
+      ) : (
+        <Table size="small">
+          <TableHead><TableRow><TableCell>Mês</TableCell><TableCell>Vencimento</TableCell><TableCell align="right">Valor</TableCell><TableCell>Situação</TableCell></TableRow></TableHead>
+          <TableBody>
+            {list.map((i) => (
+              <TableRow key={i.id}>
+                <TableCell>{formatDate(i.reference_month).slice(3)}</TableCell>
+                <TableCell>{formatDate(i.due_date)}</TableCell>
+                <TableCell align="right">{money(i.amount)}</TableCell>
+                <TableCell>{statusChip(i)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
     </Box>
   );
 }

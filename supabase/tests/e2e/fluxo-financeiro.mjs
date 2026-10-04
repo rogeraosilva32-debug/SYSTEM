@@ -96,24 +96,19 @@ await page.waitForTimeout(800);
 log('acerto no banco:', sql(`select deliveries||' entregas, km='||km||', total='||total||', '||status from settlements`));
 await page.screenshot({ path: `${SHOTS}/22-acertos.png`, fullPage: true });
 
-// ---------------- Motoboy: turno e ganhos ----------------
+// ---------------- Motoboy: ganhos ----------------
 await login(page, 'c1@t');
-await page.getByRole('button', { name: 'Iniciar turno' }).click();
-await page.getByText(/Turno aberto desde/).waitFor();
-log('turno aberto no banco:', sql(`select count(*) from courier_shifts where ended_at is null`));
+log('sem botão de turno:', await page.getByRole('button', { name: /turno/i }).count() === 0);
 await page.getByText('Ganhos', { exact: true }).click();
 await page.getByText('Previsto no período').waitFor();
 log('ganhos (motoboy):', (await page.getByText('Previsto no período').locator('xpath=..').innerText()).replace(/\s+/g, ' '));
 await page.screenshot({ path: `${SHOTS}/23-motoboy-ganhos.png`, fullPage: true });
-await page.getByText('Entregas', { exact: true }).click();
-await page.getByRole('button', { name: 'Encerrar turno' }).click();
-await page.getByText('Fora de turno').waitFor();
-log('turno encerrado:', sql(`select (ended_at is not null)::text from courier_shifts`));
 
 // ---------------- Plataforma ----------------
 await login(page, 'p@t');
 await page.getByText('Empresa A').first().click();
 await page.getByText('COBRANÇA DA LICENÇA').waitFor();
+await page.getByText('FATURAS DESTA EMPRESA').waitFor();
 await page.getByLabel('Mensalidade (R$)').fill('149,90');
 await page.getByLabel('Dia de vencimento (1–28)').fill('5');
 await page.getByText('COBRANÇA DA LICENÇA').locator('xpath=..').getByRole('button', { name: 'Salvar' }).click();
@@ -135,13 +130,12 @@ await page.getByText('Vagas usadas', { exact: true }).waitFor();
 log('uso de licenças:', (await page.getByRole('row').filter({ hasText: 'Empresa A' }).innerText()).replace(/\s+/g, ' '));
 await page.screenshot({ path: `${SHOTS}/25-plataforma-uso.png`, fullPage: true });
 
-// ---------------- Admin vê a fatura; celular ----------------
+// ---------------- Admin: abas do financeiro; celular ----------------
 await login(page, 'a1@t');
 await page.setViewportSize({ width: 390, height: 844 });
 await page.getByText('Financeiro', { exact: true }).first().click();
-await page.getByText('Licença', { exact: true }).click();
-await page.getByText('Faturas da licença').waitFor();
-log('admin vê fatura:', (await page.getByRole('row').nth(1).innerText()).replace(/\s+/g, ' '));
+await page.getByText('Caixa do dia', { exact: true }).waitFor();
+log('admin da empresa sem aba Licença/Turnos:', await page.getByText(/^(Licença|Turnos)$/).count() === 0);
 await page.getByText('Relatórios', { exact: true }).first().click();
 await page.getByText('Faturamento', { exact: true }).first().waitFor();
 const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);

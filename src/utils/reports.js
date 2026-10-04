@@ -82,3 +82,8 @@ export const CASH_KIND = {
   withdrawal: { label: "Sangria", sign: -1 },
   expense: { label: "Despesa", sign: -1 },
 };
+
+// Erro de coluna/função inexistente = script do banco desatualizado.
+export const loadError = (e) => (/schema cache|does not exist|Could not find/i.test(e?.message || "")
+  ? "O banco ainda não tem a parte financeira. Rode de novo o script supabase-b2b-schema.sql no SQL Editor do Supabase."
+  : e?.message || "Erro ao carregar.");

@@ -2286,14 +2286,11 @@ begin
     where o.courier_id = p_courier and o.status = 'delivered'
       and o.delivered_at >= v_from and o.delivered_at < v_to;
 
-  select count(*) into v_days from (
-    select (s.started_at at time zone c.timezone)::date from public.courier_shifts s
-      where s.courier_id = p_courier and s.started_at >= v_from and s.started_at < v_to
-    union
-    select (o.delivered_at at time zone c.timezone)::date from public.delivery_orders o
-      where o.courier_id = p_courier and o.status = 'delivered'
-        and o.delivered_at >= v_from and o.delivered_at < v_to
-  ) d;
+  -- Diária: cada dia (no fuso da empresa) com pelo menos uma entrega feita.
+  select count(distinct (o.delivered_at at time zone c.timezone)::date) into v_days
+    from public.delivery_orders o
+    where o.courier_id = p_courier and o.status = 'delivered'
+      and o.delivered_at >= v_from and o.delivered_at < v_to;
 
   v_km := public.courier_km(p_courier, v_from, v_to);
 
