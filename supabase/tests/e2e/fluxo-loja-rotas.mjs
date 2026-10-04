@@ -10,6 +10,7 @@ const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q
 const log = (...a) => console.log('•', ...a);
 const errors = [];
 const nominatimCalls = [];
+const photonCalls = [];
 
 // Nominatim simulado: acha qualquer endereço, menos os que têm "Inexistente".
 const PLACES = {
@@ -31,6 +32,25 @@ async function mockExternal(ctx) {
       address: { road: p.road, house_number: p.house_number, suburb: p.suburb, city: 'São Paulo', state: 'São Paulo' },
     }] });
   });
+  // Photon simulado: igual ao Nominatim; "adelina" é rua sem números no mapa (comum no Brasil).
+  await ctx.route(/photon\.komoot\.io/, (r) => {
+    const u = new URL(r.request().url());
+    const q = (u.searchParams.get('q') || '').toLowerCase();
+    photonCalls.push(Object.fromEntries(u.searchParams));
+    if (q.includes('inexistente')) return r.fulfill({ json: { features: [] } });
+    if (q.includes('adelina')) return r.fulfill({ json: { features: [{
+      geometry: { coordinates: [-45.4300, -21.5600] },
+      properties: { osm_key: 'highway', type: 'street', name: 'Rua Adelina Garcia Chagas', district: 'Rio Verde II', city: 'São Paulo', state: 'São Paulo', countrycode: 'BR' },
+    }] } });
+    const key = Object.keys(PLACES).find((k) => q.includes(k)) || 'augusta';
+    const p = PLACES[key];
+    r.fulfill({ json: { features: [{
+      geometry: { coordinates: [p.lon, p.lat] },
+      properties: { osm_key: 'place', type: 'house', street: p.road, housenumber: p.house_number, district: p.suburb, city: 'São Paulo', state: 'São Paulo', countrycode: 'BR' },
+    }] } });
+  });
+  await ctx.route(/viacep\.com\.br/, (r) => r.fulfill({ json: r.request().url().includes('37000000') ? { erro: true }
+    : { logradouro: 'Rua Augusta', bairro: 'Consolação', localidade: 'São Paulo', uf: 'SP' } }));
   await ctx.route(/router\.project-osrm\.org/, (r) => {
     const u = new URL(r.request().url());
     const pts = u.pathname.split('/').pop().split(';').map((p) => p.split(',').map(Number));
@@ -65,6 +85,7 @@ await admin.getByText('Entregas: ajustes', { exact: true }).click();
 await admin.getByText('Endereço da loja (ponto de partida)').waitFor();
 await admin.getByLabel('Buscar endereço').fill('Rua Direita 100');
 await admin.getByRole('menuitem', { name: /Rua Direita, 100/ }).click();
+log('sugestões usaram a posição da busca:', photonCalls.length > 0);
 await admin.getByText('✓ Endereço localizado no mapa.').waitFor();
 await admin.getByRole('button', { name: 'Salvar endereço da loja' }).click();
 await admin.getByText('Endereço da loja salvo.').waitFor();
@@ -92,13 +113,29 @@ await admin.getByRole('button', { name: 'Criar pedido' }).click();
 await admin.getByText('Rua Errada').first().waitFor();
 log('pedido com ponto marcado à mão:', sql(`select (lat is not null)::text||' cidade='||coalesce(address_city,'-') from delivery_orders where customer_name='Rua Errada'`));
 
+// rua que o mapa conhece mas sem números: avisa com honestidade
+await admin.getByRole('button', { name: 'Novo pedido' }).click();
+await admin.getByLabel('Rua').fill('adelina garcia chagas');
+await admin.getByLabel('Número').fill('45');
+await admin.getByText(/Localizada a rua. O mapa gratuito não tem os números/).waitFor({ timeout: 8000 });
+log('rua sem números no mapa: aviso de rua (não de número)');
+// CEP preenche rua, bairro e cidade
+await admin.getByLabel('CEP (opcional)').fill('01305000');
+await admin.waitForFunction(() => [...document.querySelectorAll('input')].some((i) => i.value === 'Consolação'));
+log('CEP preencheu:', await admin.getByLabel('Rua').inputValue(), '·', await admin.getByLabel('Bairro').inputValue(), '·', await admin.getByLabel('Cidade').inputValue());
+await admin.getByLabel('CEP (opcional)').fill('37000000');
+await admin.getByText('CEP não encontrado.').waitFor();
+await admin.getByLabel('Bairro').fill('');
+await admin.keyboard.press('Escape');
+await admin.waitForTimeout(400);
+
 await admin.getByRole('button', { name: 'Novo pedido' }).click();
 await admin.getByLabel('Nome do cliente').fill('Paula Prado');
 await admin.getByLabel('Rua').fill('Avenida Paulista');
 await admin.getByLabel('Número').fill('1000');
 await admin.getByText('✓ Endereço localizado no mapa.').waitFor({ timeout: 8000 });
-const call = nominatimCalls.at(-1);
-log('busca do pedido usou a cidade e a região da loja:', `city=${call.city || '-'} viewbox=${call.viewbox ? 'sim' : 'não'}`);
+const call = photonCalls.at(-1);
+log('busca do pedido usou a cidade e a posição da loja:', `q=${call.q} perto=${call.lat ? 'sim' : 'não'}`);
 await admin.getByLabel('Valor dos itens').fill('40');
 await admin.screenshot({ path: `${SHOTS}/31-pedido-endereco.png` });
 await admin.getByRole('button', { name: 'Criar pedido' }).click();

@@ -3,7 +3,7 @@ import { Box, TextField, Typography, Button, CircularProgress, Paper, MenuItem, 
 import SearchIcon from "@mui/icons-material/Search";
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
-import { suggestAddresses, locateAddress } from "../utils/geocoding";
+import { suggestAddresses, locateAddress, resolveSuggestion, lookupCep, addressProvider } from "../utils/geocoding";
 
 const pinIcon = new L.DivIcon({
   className: "",
@@ -18,7 +18,9 @@ const storeIcon = new L.DivIcon({
 
 const PRECISION = {
   number: "Endereço localizado no mapa.",
-  street: "Localizada a rua (sem o número exato). Confira o ponto e, se precisar, clique no mapa para ajustar.",
+  street: addressProvider === "google"
+    ? "Localizada a rua, sem o número. Clique no mapa no ponto exato da entrega."
+    : "Localizada a rua. O mapa gratuito não tem os números desta rua: o ponto fica no meio dela. Clique no mapa no ponto exato, se souber.",
   neighborhood: "Só o bairro foi localizado. Clique no mapa no ponto exato da entrega.",
   manual: "Ponto marcado no mapa.",
   suggestion: "Endereço localizado no mapa.",
@@ -52,6 +54,8 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
   const [searching, setSearching] = useState(false);
   const [locating, setLocating] = useState(false);
   const [error, setError] = useState("");
+  const [cep, setCep] = useState("");
+  const [cepBusy, setCepBusy] = useState(false);
   const near = store?.lat ? { lat: store.lat, lng: store.lng } : null;
   const lastAuto = useRef("");
 
@@ -111,13 +115,47 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.street, value.number, value.neighborhood, value.city, value.lat]);
 
-  const pick = (s) => {
-    onChange({
-      street: s.street || value.street, number: s.number || value.number, neighborhood: s.neighborhood,
-      city: s.city, state: s.state, lat: s.lat, lng: s.lng, precision: s.number || !showNumber ? "suggestion" : "street",
-    });
-    lastAuto.current = [s.street, s.number || value.number, s.neighborhood, s.city].join("|");
+  const pick = async (picked) => {
     setQuery(""); setSuggestions([]);
+    let s;
+    try { s = await resolveSuggestion(picked); } catch (e) { setError(e.message); return; }
+    if (!s?.lat) { setError("Não consegui abrir esse endereço. Tente outro ou preencha os campos."); return; }
+    const number = s.number || value.number || "";
+    const next = {
+      street: s.street || value.street, number, neighborhood: s.neighborhood || value.neighborhood,
+      city: s.city || value.city, state: s.state || value.state, lat: s.lat, lng: s.lng,
+      precision: s.precision === "number" || !showNumber ? "number" : s.precision,
+    };
+    lastAuto.current = [next.street, next.number, next.neighborhood, next.city].join("|");
+    // Sugestão era só a rua, mas o número foi digitado: tenta achar o número.
+    if (showNumber && number && next.precision !== "number") {
+      onChange(next);
+      setLocating(true);
+      try {
+        const r = await locateAddress(next, near);
+        if (r && r.precision === "number") onChange({ ...next, lat: r.lat, lng: r.lng, precision: r.precision });
+      } catch { /* fica com o ponto da sugestão */ } finally { setLocating(false); }
+      return;
+    }
+    onChange(next);
+    setError("");
+  };
+
+  const onCep = async (text) => {
+    const masked = text.replace(/\D/g, "").slice(0, 8).replace(/^(\d{5})(\d)/, "$1-$2");
+    setCep(masked);
+    if (masked.replace(/\D/g, "").length !== 8) return;
+    setCepBusy(true); setError("");
+    try {
+      const r = await lookupCep(masked);
+      if (!r) { setError("CEP não encontrado."); return; }
+      onChange({ ...value, street: r.street || value.street, neighborhood: r.neighborhood || value.neighborhood,
+        city: r.city, state: r.state, lat: null, lng: null, precision: null });
+    } catch {
+      setError("Não consegui consultar o CEP agora. Preencha os campos.");
+    } finally {
+      setCepBusy(false);
+    }
   };
 
   const point = value.lat && value.lng ? [value.lat, value.lng] : null;
@@ -134,7 +172,7 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
           <Paper sx={{ position: "absolute", zIndex: 1500, left: 0, right: 0, mt: 0.5, maxHeight: 260, overflowY: "auto" }}>
             <MenuList dense>
             {suggestions.map((s, i) => (
-              <MenuItem key={`${s.lat}-${s.lng}-${i}`} onClick={() => pick(s)} sx={{ whiteSpace: "normal", fontSize: 13, py: 1 }}>
+              <MenuItem key={`${s.display}-${i}`} onClick={() => pick(s)} sx={{ whiteSpace: "normal", fontSize: 13, py: 1 }}>
                 {s.display}
               </MenuItem>
             ))}
@@ -143,6 +181,9 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
         )}
       </Box>
 
+      <TextField label="CEP (opcional)" size="small" value={cep} onChange={(e) => onCep(e.target.value)}
+        placeholder="00000-000" inputProps={{ inputMode: "numeric" }} sx={{ maxWidth: 200 }}
+        InputProps={{ endAdornment: cepBusy ? <CircularProgress size={14} /> : null }} />
       <Box sx={{ display: "grid", gridTemplateColumns: showNumber ? "2fr 1fr" : "1fr", gap: 1.2 }}>
         <TextField label="Rua" size="small" value={value.street || ""} onChange={(e) => setText({ street: e.target.value })} />
         {showNumber && <TextField label="Número" size="small" value={value.number || ""} onChange={(e) => setText({ number: e.target.value })} />}

@@ -1,3 +1,4 @@
+import { hasGoogleMaps, googleSuggest, googlePlace, googleGeocode } from "./googleMaps";
 // Geocodificação via Nominatim (OpenStreetMap) — usado tanto pra endereço de
 // serviço (Booking) quanto pra localização base do profissional (Profile).
 
@@ -148,25 +149,48 @@ export async function searchAddressSuggestions(query) {
 }
 
 // ── Busca de endereço de entrega (pedido e loja) ──────────────────────────
-// Prefere resultados perto da loja (caixa de ~40 km em volta dela), para que
-// "Rua das Flores, 10" ache a rua da cidade da loja e não outra do Brasil.
+// Com a chave do Google configurada (VITE_GOOGLE_MAPS_API_KEY), usa o Google,
+// que acha o número da casa. Sem ela, usa OpenStreetMap (Photon para as
+// sugestões e Nominatim), que no Brasil quase nunca tem o número: o ponto
+// fica na rua. O CEP (ViaCEP) preenche rua, bairro e cidade oficiais.
+
+const norm = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const sameCity = (a, b) => !a || !b || norm(a).includes(norm(b)) || norm(b).includes(norm(a));
+const STREET_TYPES = /^(rua|r\.|avenida|av\.?|travessa|tv\.?|alameda|al\.?|estrada|rodovia|praca|praça|largo|viela|beco|via|servidao|servidão)\b/i;
+
+// Prefere resultados perto da loja (caixa de ~40 km em volta dela).
 function nearParams(near) {
   if (!near?.lat || !near?.lng) return {};
   const d = 0.35;
   return { viewbox: `${near.lng - d},${near.lat + d},${near.lng + d},${near.lat - d}`, bounded: "0" };
 }
 
-function toResult(item) {
+// Precisão real do que foi achado (não do que foi pedido): número, rua ou só a região.
+function nominatimResult(item) {
   const addr = item.address || {};
+  const street = [addr.road, addr.pedestrian, addr.footway].filter(Boolean).join(" ") || "";
+  const precision = addr.house_number ? "number" : item.class === "highway" || (street && item.class !== "place" && item.class !== "boundary") ? "street" : "neighborhood";
   return {
-    display: item.display_name,
-    street: [addr.road, addr.pedestrian, addr.footway].filter(Boolean).join(" ") || "",
-    number: addr.house_number || "",
+    display: item.display_name, street, number: addr.house_number || "",
     neighborhood: addr.neighbourhood || addr.suburb || addr.city_district || addr.quarter || "",
     city: addr.city || addr.town || addr.village || addr.municipality || "",
-    state: addr.state || "",
-    lat: parseFloat(item.lat),
-    lng: parseFloat(item.lon),
+    state: addr.state || "", lat: parseFloat(item.lat), lng: parseFloat(item.lon), precision,
+  };
+}
+
+function photonResult(f) {
+  const p = f.properties || {};
+  const isStreet = p.osm_key === "highway" || p.type === "street";
+  const street = p.street || (isStreet ? p.name : "") || "";
+  const precision = p.housenumber ? "number" : street ? "street" : "neighborhood";
+  const neighborhood = p.district || p.locality || (p.type === "district" || p.type === "locality" ? p.name : "") || "";
+  const display = [
+    [street || (!isStreet ? p.name : ""), p.housenumber].filter(Boolean).join(", "),
+    neighborhood, [p.city, p.state].filter(Boolean).join(" - "),
+  ].filter(Boolean).join(" · ");
+  return {
+    display, street, number: p.housenumber || "", neighborhood, city: p.city || p.county || "", state: p.state || "",
+    lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], precision, country: p.countrycode,
   };
 }
 
@@ -175,40 +199,96 @@ async function nominatim(params) {
     format: "json", countrycodes: "br", addressdetails: "1", "accept-language": "pt-BR", ...params,
   })}`);
   if (!res.ok) throw new Error(`Busca de endereço indisponível (${res.status}).`);
-  return res.json();
+  return ((await res.json()) || []).map(nominatimResult);
 }
+
+async function photon(q, near, limit = 6) {
+  const params = new URLSearchParams({ q, limit: String(limit + 4), lang: "default" });
+  if (near?.lat) { params.set("lat", near.lat); params.set("lon", near.lng); }
+  const res = await fetch(`https://photon.komoot.io/api/?${params}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.features || []).map(photonResult).filter((r) => !r.country || r.country === "BR").slice(0, limit);
+}
+
+// CEP → rua, bairro, cidade e UF (ViaCEP, gratuito).
+export async function lookupCep(cep) {
+  const digits = String(cep || "").replace(/\D/g, "");
+  if (digits.length !== 8) return null;
+  const res = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+  if (!res.ok) return null;
+  const d = await res.json();
+  if (d.erro) return null;
+  return { street: d.logradouro || "", neighborhood: d.bairro || "", city: d.localidade || "", state: d.uf || "", cep: digits };
+}
+
+export const addressProvider = hasGoogleMaps ? "google" : "osm";
 
 // Sugestões enquanto digita (texto livre: "rua direita 100 centro").
 export async function suggestAddresses(text, near) {
   const q = text?.trim();
   if (!q || q.length < 4) return [];
-  const data = await nominatim({ q, limit: "6", ...nearParams(near) });
-  return (data || []).map(toResult);
+  if (hasGoogleMaps) {
+    try { return await googleSuggest(q, near); } catch { /* cai no OpenStreetMap */ }
+  }
+  let list = [];
+  try { list = await photon(q, near); } catch { /* tenta o Nominatim */ }
+  if (list.length < 3) {
+    try {
+      const more = await nominatim({ q, limit: "6", ...nearParams(near) });
+      const seen = new Set(list.map((r) => `${r.lat.toFixed(4)},${r.lng.toFixed(4)}`));
+      list = [...list, ...more.filter((r) => !seen.has(`${r.lat.toFixed(4)},${r.lng.toFixed(4)}`))];
+    } catch { /* fica com o que tiver */ }
+  }
+  return list.slice(0, 6);
 }
 
-// Acha o ponto de um endereço digitado em campos. Tenta do mais preciso
-// (rua + número) ao menos preciso (só a rua; depois bairro) e diz qual foi.
+// Detalhe de uma sugestão (no Google, a sugestão ainda não traz o ponto).
+export async function resolveSuggestion(s) {
+  if (s.placePrediction) return googlePlace(s.placePrediction);
+  return s;
+}
+
+const RANK = { number: 3, street: 2, neighborhood: 1 };
+
+// Acha o ponto de um endereço digitado em campos e diz a precisão real
+// (número, rua ou bairro). Tenta várias formas e fica com a mais precisa.
 export async function locateAddress({ street, number, neighborhood, city, state }, near) {
   const where = [city, state].filter(Boolean).join(", ");
-  const attempts = [];
-  if (street) {
-    attempts.push({ precision: number ? "number" : "street", params: { street: [number, street].filter(Boolean).join(" "), city: city || "", state: state || "" } });
-    attempts.push({ precision: number ? "number" : "street", params: { q: [street, number, neighborhood, where].filter(Boolean).join(", ") } });
-    if (number) attempts.push({ precision: "street", params: { q: [street, neighborhood, where].filter(Boolean).join(", ") } });
+  if (hasGoogleMaps) {
+    try {
+      const r = await googleGeocode([[street, number].filter(Boolean).join(", "), neighborhood, where, "Brasil"].filter(Boolean).join(", "), near);
+      if (r && sameCity(r.city, city)) return r;
+    } catch { /* cai no OpenStreetMap */ }
   }
-  if (neighborhood) attempts.push({ precision: "neighborhood", params: { q: [neighborhood, where].filter(Boolean).join(", ") } });
-  for (const a of attempts) {
-    const clean = Object.fromEntries(Object.entries(a.params).filter(([, v]) => v));
-    const data = await nominatim({ ...clean, limit: "1", ...nearParams(near) });
-    if (data?.[0]) {
-      const r = toResult(data[0]);
-      // Com cidade informada, recusa resultado de outra cidade.
-      const n = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
-      if (city && r.city && !n(r.city).includes(n(city)) && !n(city).includes(n(r.city))) continue;
-      return { ...r, precision: a.precision };
+  const streets = street ? [street] : [];
+  if (street && !STREET_TYPES.test(street.trim())) streets.push(`Rua ${street}`);
+  const tries = [];
+  for (const st of streets) {
+    if (number) tries.push(() => photon([st, number, city].filter(Boolean).join(" "), near, 3));
+    tries.push(() => nominatim({ street: [number, st].filter(Boolean).join(" "), city: city || "", state: state || "", limit: "3", ...nearParams(near) }));
+    tries.push(() => nominatim({ q: [st, where].filter(Boolean).join(", "), limit: "3", ...nearParams(near) }));
+    tries.push(() => photon([st, city].filter(Boolean).join(" "), near, 3));
+    if (neighborhood) tries.push(() => nominatim({ q: [st, neighborhood, where].filter(Boolean).join(", "), limit: "3", ...nearParams(near) }));
+  }
+  if (neighborhood) tries.push(() => nominatim({ q: [neighborhood, where].filter(Boolean).join(", "), limit: "1", ...nearParams(near) }));
+
+  let best = null;
+  const want = norm(street).replace(STREET_TYPES, "").trim();
+  for (const t of tries) {
+    let results;
+    try { results = await t(); } catch { continue; }
+    for (const r of results) {
+      if (!sameCity(r.city, city)) continue;
+      // Resultado de rua precisa ser a rua digitada, não outra parecida.
+      if (r.precision !== "neighborhood" && want && !norm(r.street).includes(want.split(" ").slice(-1)[0])) continue;
+      if (r.precision === "number" && number && norm(r.number) !== norm(number)) r.precision = "street";
+      if (!best || RANK[r.precision] > RANK[best.precision]) best = r;
+      if (best.precision === "number" || (best.precision === "street" && !number)) return best;
     }
+    if (best?.precision === "street" && tries.indexOf(t) > 2) return best;
   }
-  return null;
+  return best;
 }
 
 // Rota passando por vários pontos em ordem ([{lat,lng}, ...]), para mostrar

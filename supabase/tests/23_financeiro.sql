@@ -30,7 +30,7 @@ insert into location_pings (company_id, courier_id, lat, lng, recorded_at) value
 
 -- ---------- Relatório financeiro ----------
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
-select report_financial(current_date - 1, current_date) as fin \gset
+select report_financial((now() at time zone 'America/Sao_Paulo')::date - 1, (now() at time zone 'America/Sao_Paulo')::date) as fin \gset
 select tests.ok('financeiro: entregues e cancelados', (:'fin'::jsonb->'totals'->>'delivered')::int = 4
   and (:'fin'::jsonb->'totals'->>'cancelled')::int = 1);
 select tests.ok('financeiro: faturamento só de entregues (35+25+10+18)', (:'fin'::jsonb->'totals'->>'revenue')::numeric = 88);
@@ -40,20 +40,20 @@ select tests.ok('financeiro: dinheiro ainda não conferido', (:'fin'::jsonb->'to
 select tests.ok('financeiro: por bairro', jsonb_array_length(:'fin'::jsonb->'by_neighborhood') = 2);
 
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
-select tests.bloqueado('motoboy não vê relatório financeiro', $q$select report_financial(current_date, current_date)$q$);
+select tests.bloqueado('motoboy não vê relatório financeiro', $q$select report_financial((now() at time zone 'America/Sao_Paulo')::date, (now() at time zone 'America/Sao_Paulo')::date)$q$);
 select tests.as_user('00000000-0000-0000-0000-0000000000e1');
-select tests.bloqueado('supervisor não vê relatório financeiro', $q$select report_financial(current_date, current_date)$q$);
+select tests.bloqueado('supervisor não vê relatório financeiro', $q$select report_financial((now() at time zone 'America/Sao_Paulo')::date, (now() at time zone 'America/Sao_Paulo')::date)$q$);
 select tests.as_user('00000000-0000-0000-0000-0000000000b1');
-select tests.ok('outra empresa vê só os próprios números', (report_financial(current_date - 1, current_date)->'totals'->>'orders')::int = 0);
+select tests.ok('outra empresa vê só os próprios números', (report_financial((now() at time zone 'America/Sao_Paulo')::date - 1, (now() at time zone 'America/Sao_Paulo')::date)->'totals'->>'orders')::int = 0);
 select tests.ok('admin não escolhe outra empresa no relatório',
-  (report_financial(current_date - 1, current_date, 'aaaaaaaa-0000-0000-0000-000000000000')->'totals'->>'orders')::int = 0);
+  (report_financial((now() at time zone 'America/Sao_Paulo')::date - 1, (now() at time zone 'America/Sao_Paulo')::date, 'aaaaaaaa-0000-0000-0000-000000000000')->'totals'->>'orders')::int = 0);
 select tests.as_user('00000000-0000-0000-0000-0000000000a0');
 select tests.ok('plataforma vê relatório de uma empresa',
-  (report_financial(current_date - 1, current_date, 'aaaaaaaa-0000-0000-0000-000000000000')->'totals'->>'orders')::int = 5);
+  (report_financial((now() at time zone 'America/Sao_Paulo')::date - 1, (now() at time zone 'America/Sao_Paulo')::date, 'aaaaaaaa-0000-0000-0000-000000000000')->'totals'->>'orders')::int = 5);
 
 -- ---------- Produtividade ----------
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
-select report_productivity(current_date - 1, current_date) as prod \gset
+select report_productivity((now() at time zone 'America/Sao_Paulo')::date - 1, (now() at time zone 'America/Sao_Paulo')::date) as prod \gset
 select (x) as c1 from jsonb_array_elements(:'prod'::jsonb->'couriers') x where x->>'name' = 'C1' \gset
 select tests.ok('produtividade: entregas por motoboy', (:'c1'::jsonb->>'deliveries')::int = 3);
 select tests.ok('produtividade: entrega forçada contada', (:'c1'::jsonb->>'forced')::int = 1);
@@ -89,7 +89,7 @@ select tests.bloqueado('motoboy não confere pagamento', format($q$select confir
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
 insert into cash_movements (company_id, kind, amount, note) values ('aaaaaaaa-0000-0000-0000-000000000000', 'opening', 100, 'troco');
 insert into cash_movements (company_id, kind, amount, note) values ('aaaaaaaa-0000-0000-0000-000000000000', 'expense', 20, 'gasolina');
-select report_cash_day(current_date) as caixa \gset
+select report_cash_day((now() at time zone 'America/Sao_Paulo')::date) as caixa \gset
 select tests.ok('caixa: vendas em dinheiro e recebido', (:'caixa'::jsonb->>'cash_sales')::numeric = 53 and (:'caixa'::jsonb->>'cash_received')::numeric = 35);
 select tests.ok('caixa: abertura e despesa', (:'caixa'::jsonb->>'opening')::numeric = 100 and (:'caixa'::jsonb->>'expenses')::numeric = 20);
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
@@ -102,21 +102,21 @@ select tests.bloqueado('outra empresa não lança no caixa alheio', $q$insert in
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
 insert into courier_rates (courier_id, company_id, per_delivery) values ('00000000-0000-0000-0000-0000000000c2', 'aaaaaaaa-0000-0000-0000-000000000000', 6);
 select tests.bloqueado('valor de motoboy de outra empresa', $q$insert into courier_rates (courier_id, company_id, per_delivery) values ('00000000-0000-0000-0000-0000000000bc', 'aaaaaaaa-0000-0000-0000-000000000000', 1)$q$);
-select preview_settlement('00000000-0000-0000-0000-0000000000c1', current_date, current_date) as prev \gset
+select preview_settlement('00000000-0000-0000-0000-0000000000c1', (now() at time zone 'America/Sao_Paulo')::date, (now() at time zone 'America/Sao_Paulo')::date) as prev \gset
 select tests.ok('acerto: 1 dia x 50 + 3 entregas x 4 + km x 1',
   (:'prev'::jsonb->>'days_worked')::int = 1 and (:'prev'::jsonb->>'delivery_total')::numeric = 12
   and (:'prev'::jsonb->>'total')::numeric between 63.9 and 64.1);
 select tests.ok('acerto: dinheiro em mãos do motoboy', (:'prev'::jsonb->>'cash_collected')::numeric = 30 + 5);
 select tests.ok('acerto: valor próprio do motoboy substitui o padrão',
-  (preview_settlement('00000000-0000-0000-0000-0000000000c2', current_date, current_date)->>'per_delivery')::numeric = 6);
-select create_settlement('00000000-0000-0000-0000-0000000000c1', current_date, current_date, -4, 'vale') as acerto \gset
+  (preview_settlement('00000000-0000-0000-0000-0000000000c2', (now() at time zone 'America/Sao_Paulo')::date, (now() at time zone 'America/Sao_Paulo')::date)->>'per_delivery')::numeric = 6);
+select create_settlement('00000000-0000-0000-0000-0000000000c1', (now() at time zone 'America/Sao_Paulo')::date, (now() at time zone 'America/Sao_Paulo')::date, -4, 'vale') as acerto \gset
 select tests.ok('acerto gravado com ajuste', (select total between 59.9 and 60.1 and status = 'open' from settlements where id = :'acerto'));
-select tests.bloqueado('não cria acerto sobreposto', $q$select create_settlement('00000000-0000-0000-0000-0000000000c1', current_date, current_date)$q$);
+select tests.bloqueado('não cria acerto sobreposto', $q$select create_settlement('00000000-0000-0000-0000-0000000000c1', (now() at time zone 'America/Sao_Paulo')::date, (now() at time zone 'America/Sao_Paulo')::date)$q$);
 select tests.bloqueado('acerto não é alterado direto', format($q$update settlements set total = 999 where id = %L$q$, :'acerto'));
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
 select tests.ok('motoboy vê o próprio acerto', (select count(*) from settlements) = 1);
 select tests.bloqueado('motoboy não dá baixa no acerto', format($q$select pay_settlement(%L)$q$, :'acerto'));
-select tests.bloqueado('motoboy não vê prévia de outro', $q$select preview_settlement('00000000-0000-0000-0000-0000000000c2', current_date, current_date)$q$);
+select tests.bloqueado('motoboy não vê prévia de outro', $q$select preview_settlement('00000000-0000-0000-0000-0000000000c2', (now() at time zone 'America/Sao_Paulo')::date, (now() at time zone 'America/Sao_Paulo')::date)$q$);
 select tests.as_user('00000000-0000-0000-0000-0000000000c2');
 select tests.ok('outro motoboy não vê o acerto', (select count(*) from settlements) = 0);
 select tests.as_user('00000000-0000-0000-0000-0000000000b1');

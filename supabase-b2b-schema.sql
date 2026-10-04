@@ -2642,3 +2642,6 @@ language sql stable security definer as $$
   from public.companies c where c.id = public.my_company_id()
 $$;
 grant execute on function public.my_company_settings() to authenticated;
+
+-- Atualiza o cache do Supabase (evita "Could not find the column ... in the schema cache").
+notify pgrst, 'reload schema';

@@ -543,3 +543,14 @@ Teste no navegador: `node supabase/tests/e2e/fluxo-financeiro.mjs` (depois do `s
 - **Mapa ao vivo e detalhe do pedido:** trajeto previsto a partir da loja.
 
 Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.
+
+## 29. Busca de endereço (rua e número)
+
+- **CEP (opcional)**: preenche rua, bairro e cidade oficiais (ViaCEP).
+- **Sem chave do Google** (padrão): usa OpenStreetMap (Photon + Nominatim). No Brasil o mapa gratuito quase nunca tem o número das casas, então o ponto fica na rua e a tela avisa isso; para o ponto exato, clique no mapa ou arraste o marcador.
+- **Com chave do Google** (`VITE_GOOGLE_MAPS_API_KEY` no Netlify): sugestões e localização exatas até o número.
+  1. Google Cloud: crie um projeto com faturamento e ative *Maps JavaScript API*, *Places API (New)* e *Geocoding API*.
+  2. Crie uma chave e restrinja a *Sites (referenciadores HTTP)*: `appgerencrm.netlify.app/*`.
+  3. Netlify → Environment variables: `VITE_GOOGLE_MAPS_API_KEY` = a chave. Se o build falhar no *secrets scanning*, adicione `SECRETS_SCAN_OMIT_KEYS` = `VITE_GOOGLE_MAPS_API_KEY` (a chave do Maps fica no navegador mesmo; a proteção é a restrição por site).
+  4. Faça um novo deploy.
+- O script do banco termina com `notify pgrst, 'reload schema'`, que resolve o erro "Could not find the column ... in the schema cache" depois de rodar.
