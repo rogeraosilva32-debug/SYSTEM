@@ -554,3 +554,21 @@ Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.
   3. Netlify → Environment variables: `VITE_GOOGLE_MAPS_API_KEY` = a chave. Se o build falhar no *secrets scanning*, adicione `SECRETS_SCAN_OMIT_KEYS` = `VITE_GOOGLE_MAPS_API_KEY` (a chave do Maps fica no navegador mesmo; a proteção é a restrição por site).
   4. Faça um novo deploy.
 - O script do banco termina com `notify pgrst, 'reload schema'`, que resolve o erro "Could not find the column ... in the schema cache" depois de rodar.
+
+## 30. Cardápio e taxa do motoboy
+
+- **Aba Cardápio** (admin da empresa): categorias, produtos com descrição e
+  preço único ou opções de preço (ex.: Hambúrguer / Frango ou lombo, Normal /
+  Aberto) e adicionais (Bacon, Catupiry...). Dá para editar, reordenar, tirar
+  do cardápio (interruptor) ou excluir. O supervisor só lê.
+- **Novo pedido**: os itens são escolhidos do cardápio (opção, adicionais,
+  quantidade, observação). O valor não é digitado: o banco calcula pelos
+  preços do cardápio (`create_delivery_order` / `set_order_items`) e grava o
+  preço do momento em `delivery_order_items`.
+- **Taxa do motoboy**: ao despachar, o valor por entrega do motoboy (Financeiro →
+  Valores do motoboy; o dele ou o padrão da empresa) vai para
+  `delivery_orders.courier_fee` e entra no total, separado da taxa do bairro.
+  Trocar o motoboy da saída troca a taxa; tirar o pedido da saída zera.
+  Desliga em "Entregas: ajustes".
+- **Cardápio inicial**: `supabase/seeds/cardapio-pantera-lanches.sql` (rodar
+  depois do schema; ajuste o nome da empresa na primeira linha do bloco).

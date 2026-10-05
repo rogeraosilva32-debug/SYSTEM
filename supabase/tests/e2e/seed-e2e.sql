@@ -8,3 +8,8 @@ insert into delivery_orders (company_id, customer_name, customer_phone, address_
   ('aaaaaaaa-0000-0000-0000-000000000000', 'Bruno Lima', '11933334444', 'Rua Treze de Maio', '500', 'Bela Vista', 'São Paulo', -23.5605, -46.6460, 31.5, 'dinheiro', 'ready'),
   ('aaaaaaaa-0000-0000-0000-000000000000', 'Carla Dias', '11955556666', 'Rua XV de Novembro', '200', 'Centro', 'São Paulo', -23.5460, -46.6340, 25, 'cartao', 'preparing');
 update profiles set last_lat = -23.5505, last_lng = -46.6333, last_location_at = now() where id = '00000000-0000-0000-0000-0000000000c1';
+-- Cardápio mínimo para os pedidos criados no navegador.
+insert into product_categories (id, company_id, name, sort_order) values
+  ('ca000000-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000000', 'Pão de forma', 1);
+insert into products (company_id, category_id, name, description, price) values
+  ('aaaaaaaa-0000-0000-0000-000000000000', 'ca000000-0000-0000-0000-000000000001', 'Misto quente', 'presunto e queijo', 19);
