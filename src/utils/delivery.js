@@ -19,6 +19,21 @@ export function money(v) {
   return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+// "29,50" / "29.50" / "R$ 29,50" → 29.5 (null se vazio ou inválido).
+export function parsePrice(v) {
+  const t = String(v ?? "").replace(/[^\d,.-]/g, "").trim();
+  if (!t) return null;
+  const n = Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+// Prévia do preço de um item do pedido (o banco recalcula ao salvar).
+export function itemUnitPrice(product, variantName, addons = []) {
+  const variant = (product.variants || []).find((v) => v.name === variantName);
+  const base = product.variants?.length ? Number(variant?.price ?? 0) : Number(product.price || 0);
+  return base + addons.reduce((s, a) => s + Number(a.price || 0), 0);
+}
+
 export function orderAddress(o) {
   const street = [o.address_street, o.address_number].filter(Boolean).join(", ");
   return [street, o.address_complement, o.address_neighborhood, o.address_city].filter(Boolean).join(" · ");

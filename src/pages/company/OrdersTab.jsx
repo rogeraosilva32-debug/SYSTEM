@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Box, Typography, Button, TextField, MenuItem, CircularProgress, Chip, Checkbox,
-  Dialog, DialogTitle, DialogContent, DialogActions, IconButton, FormControlLabel, Alert,
+  Dialog, DialogTitle, DialogContent, DialogActions, IconButton, FormControlLabel, Alert, Autocomplete,
 } from "@mui/material";
+import RemoveIcon from "@mui/icons-material/Remove";
 import AddIcon from "@mui/icons-material/Add";
 import CloseIcon from "@mui/icons-material/Close";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
@@ -20,7 +21,7 @@ import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import {
   ORDER_STATUS, PAYMENT_LABEL, SOURCE_LABEL, money, orderAddress, whatsappUrl,
-  deliveryCodeMessage, groupByNeighborhood, suggestStopOrder,
+  deliveryCodeMessage, groupByNeighborhood, suggestStopOrder, parsePrice, itemUnitPrice,
 } from "../../utils/delivery";
 
 const COLUMNS = ["received", "preparing", "ready", "on_route", "problem"];
@@ -40,7 +41,133 @@ function StatusChip({ status }) {
 // ───────────────────────── Novo pedido ─────────────────────────
 const EMPTY_ADDRESS = { street: "", number: "", neighborhood: "", city: "", state: "", lat: null, lng: null, precision: null };
 
-function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
+function itemLabel(it) {
+  return `${it.product.name}${it.variant ? ` (${it.variant})` : ""}${it.addons.map((a) => ` + ${a.name}`).join("")}`;
+}
+
+// Escolha de produto do cardápio: opção de preço, adicionais, quantidade.
+function ProductPicker({ menu, onAdd }) {
+  const [product, setProduct] = useState(null);
+  const [variant, setVariant] = useState("");
+  const [addonIds, setAddonIds] = useState([]);
+  const [qty, setQty] = useState(1);
+  const [notes, setNotes] = useState("");
+  const [input, setInput] = useState("");
+
+  const choose = (p) => {
+    setProduct(p); setVariant(p?.variants?.length === 1 ? p.variants[0].name : "");
+    setAddonIds([]); setQty(1); setNotes("");
+  };
+  const addons = menu.addons.filter((a) => addonIds.includes(a.id));
+  const unit = product ? itemUnitPrice(product, variant, addons) : 0;
+  const needsVariant = product?.variants?.length > 0 && !variant;
+
+  const add = () => {
+    onAdd({ key: `${Date.now()}-${Math.random()}`, product, variant: product.variants?.length ? variant : null, addons, quantity: qty, notes: notes.trim(), unit });
+    choose(null); setInput("");
+  };
+
+  return (
+    <Box sx={{ p: 1.5, border: "1px solid #E7E5E4", borderRadius: "12px", display: "flex", flexDirection: "column", gap: 1.2 }}>
+      <Autocomplete
+        size="small" options={menu.items} value={product} inputValue={input}
+        onInputChange={(_, v) => setInput(v)} onChange={(_, p) => choose(p)}
+        groupBy={(p) => p.category_name} getOptionLabel={(p) => p.name}
+        isOptionEqualToValue={(a, b) => a.id === b.id}
+        filterOptions={(opts, { inputValue }) => {
+          const q = inputValue.trim().toLowerCase();
+          return q ? opts.filter((p) => p.name.toLowerCase().includes(q) || (p.description || "").toLowerCase().includes(q)) : opts;
+        }}
+        renderOption={(props, p) => {
+          const { key, ...rest } = props;
+          return (
+            <li key={key} {...rest}>
+              <Box sx={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 1 }}>
+                <span>{p.name}</span>
+                <span style={{ color: "#78716C", fontSize: 12.5 }}>{p.variants?.length ? `a partir de ${money(p.price)}` : money(p.price)}</span>
+              </Box>
+            </li>
+          );
+        }}
+        renderInput={(params) => <TextField {...params} label="Adicionar produto do cardápio" placeholder="Digite o nome" />}
+        noOptionsText={menu.items.length ? "Nenhum produto encontrado" : "Cardápio vazio: cadastre os produtos na aba Cardápio"}
+      />
+      {product && (
+        <>
+          {product.description && <Typography sx={{ fontSize: 12, color: "#78716C", mt: -0.5 }}>{product.description}</Typography>}
+          {product.variants?.length > 0 && (
+            <Box sx={{ display: "flex", gap: 0.6, flexWrap: "wrap" }}>
+              {product.variants.map((v) => (
+                <Chip key={v.name} label={`${v.name} · ${money(v.price)}`} onClick={() => setVariant(v.name)}
+                  color={variant === v.name ? "primary" : "default"} variant={variant === v.name ? "filled" : "outlined"} />
+              ))}
+            </Box>
+          )}
+          {menu.addons.length > 0 && (
+            <Box>
+              <Typography sx={{ fontSize: 11.5, fontWeight: 700, color: "#78716C", mb: 0.5 }}>ADICIONAIS</Typography>
+              <Box sx={{ display: "flex", gap: 0.6, flexWrap: "wrap" }}>
+                {menu.addons.map((a) => {
+                  const on = addonIds.includes(a.id);
+                  return (
+                    <Chip key={a.id} size="small" label={`${a.name} +${money(a.price)}`} variant={on ? "filled" : "outlined"} color={on ? "primary" : "default"}
+                      onClick={() => setAddonIds(on ? addonIds.filter((x) => x !== a.id) : [...addonIds, a.id])} />
+                  );
+                })}
+              </Box>
+            </Box>
+          )}
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+            <Box sx={{ display: "flex", alignItems: "center", border: "1px solid #E7E5E4", borderRadius: "10px" }}>
+              <IconButton size="small" aria-label="Diminuir quantidade" disabled={qty <= 1} onClick={() => setQty(qty - 1)}><RemoveIcon fontSize="small" /></IconButton>
+              <Typography sx={{ width: 28, textAlign: "center", fontWeight: 700 }}>{qty}</Typography>
+              <IconButton size="small" aria-label="Aumentar quantidade" onClick={() => setQty(qty + 1)}><AddIcon fontSize="small" /></IconButton>
+            </Box>
+            <TextField size="small" label="Observação do item" placeholder="Ex.: sem cebola" value={notes} onChange={(e) => setNotes(e.target.value)} sx={{ flex: 1, minWidth: 160 }} />
+            <Button variant="contained" onClick={add} disabled={needsVariant}>
+              {needsVariant ? "Escolha a opção" : `Adicionar ${money(unit * qty)}`}
+            </Button>
+          </Box>
+        </>
+      )}
+    </Box>
+  );
+}
+
+function Cart({ cart, setCart }) {
+  if (cart.length === 0) return <Typography sx={{ fontSize: 12.5, color: "#A8A29E" }}>Nenhum produto no pedido.</Typography>;
+  const setQty = (key, q) => setCart(cart.map((it) => (it.key === key ? { ...it, quantity: q } : it)));
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.6 }}>
+      {cart.map((it) => (
+        <Box key={it.key} sx={{ display: "flex", alignItems: "center", gap: 1, p: 0.8, border: "1px solid #E7E5E4", borderRadius: "10px" }}>
+          <Box sx={{ display: "flex", alignItems: "center" }}>
+            <IconButton size="small" aria-label="Diminuir quantidade" disabled={it.quantity <= 1} onClick={() => setQty(it.key, it.quantity - 1)}><RemoveIcon fontSize="small" /></IconButton>
+            <Typography sx={{ width: 22, textAlign: "center", fontWeight: 700, fontSize: 13 }}>{it.quantity}</Typography>
+            <IconButton size="small" aria-label="Aumentar quantidade" onClick={() => setQty(it.key, it.quantity + 1)}><AddIcon fontSize="small" /></IconButton>
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{itemLabel(it)}</Typography>
+            {it.notes && <Typography sx={{ fontSize: 11.5, color: "#78716C" }}>{it.notes}</Typography>}
+          </Box>
+          <Typography sx={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" }}>{money(it.unit * it.quantity)}</Typography>
+          <IconButton size="small" aria-label="Tirar do pedido" onClick={() => setCart(cart.filter((x) => x.key !== it.key))}><DeleteOutlineIcon fontSize="small" /></IconButton>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+function SummaryLine({ label, value, strong, muted }) {
+  return (
+    <Box sx={{ display: "flex", justifyContent: "space-between", fontSize: strong ? 15 : 13 }}>
+      <Typography sx={{ fontSize: "inherit", fontWeight: strong ? 800 : 500, color: muted ? "#A8A29E" : "#44403C" }}>{label}</Typography>
+      <Typography sx={{ fontSize: "inherit", fontWeight: strong ? 800 : 600, color: muted ? "#A8A29E" : "#1C1917" }}>{value}</Typography>
+    </Box>
+  );
+}
+
+function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasCourierFee }) {
   const settings = useCompanySettings();
   const store = settings?.store_lat ? {
     lat: settings.store_lat, lng: settings.store_lng, city: settings.store_city, state: settings.store_state,
@@ -51,8 +178,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
   const [address, setAddress] = useState(EMPTY_ADDRESS);
   const [complement, setComplement] = useState("");
   const [source, setSource] = useState("telefone");
-  const [items, setItems] = useState("");
-  const [subtotal, setSubtotal] = useState("");
+  const [cart, setCart] = useState([]);
   const [fee, setFee] = useState("");
   const [payment, setPayment] = useState("dinheiro");
   const [changeFor, setChangeFor] = useState("");
@@ -64,7 +190,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
 
   const reset = () => {
     setPhone(""); setName(""); setCustomerId(null); setAddress(EMPTY_ADDRESS); setComplement("");
-    setSource("telefone"); setItems(""); setSubtotal(""); setFee(""); setPayment("dinheiro");
+    setSource("telefone"); setCart([]); setFee(""); setPayment("dinheiro");
     setChangeFor(""); setNotes(""); setSaveCustomer(true); setError(""); setFound("");
   };
 
@@ -74,6 +200,9 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
     const z = zones.find((z) => z.active && norm(z.name) === norm(address.neighborhood));
     return z ? Number(z.fee) : null;
   }, [zones, address.neighborhood]);
+
+  const subtotal = cart.reduce((s, it) => s + it.unit * it.quantity, 0);
+  const feeValue = fee === "" ? zoneFee || 0 : parsePrice(fee) || 0;
 
   const lookupCustomer = async () => {
     const digits = phone.replace(/\D/g, "");
@@ -96,6 +225,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
   const handleSave = async () => {
     setError("");
     if (!name.trim()) { setError("Informe o nome do cliente."); return; }
+    if (cart.length === 0) { setError("Adicione ao menos um produto do cardápio."); return; }
     setSaving(true);
     // Sem ponto no mapa o motoboy fica sem rota: tenta localizar agora o que
     // foi digitado e, se não achar, pede para marcar no mapa.
@@ -131,16 +261,21 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
       }
     }
 
-    const { data, error: insertError } = await supabase.from("delivery_orders").insert({
-      company_id: companyId, source, customer_id: custId, customer_name: name.trim(), customer_phone: digits,
-      ...addressCols,
-      items: items.trim() || null,
-      subtotal: Number(String(subtotal).replace(",", ".")) || 0,
-      delivery_fee: fee === "" ? null : Number(String(fee).replace(",", ".")) || 0,
-      payment_method: payment,
-      change_for: payment === "dinheiro" && changeFor ? Number(String(changeFor).replace(",", ".")) : null,
-      notes: notes.trim() || null,
-    }).select("*").single();
+    // Valor dos itens calculado no banco a partir do cardápio.
+    const { data, error: insertError } = await supabase.rpc("create_delivery_order", {
+      p_order: {
+        source, customer_id: custId, customer_name: name.trim(), customer_phone: digits,
+        ...addressCols,
+        delivery_fee: fee === "" ? null : parsePrice(fee) || 0,
+        payment_method: payment,
+        change_for: payment === "dinheiro" && changeFor ? parsePrice(changeFor) : null,
+        notes: notes.trim() || null,
+      },
+      p_items: cart.map((it) => ({
+        product_id: it.product.id, variant: it.variant, addon_ids: it.addons.map((a) => a.id),
+        quantity: it.quantity, notes: it.notes || null,
+      })),
+    });
 
     setSaving(false);
     if (insertError) { setError(insertError.message); return; }
@@ -164,9 +299,13 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
         )}
         <DeliveryAddressField value={address} onChange={setAddress} store={store} />
         <TextField label="Complemento / referência" size="small" value={complement} onChange={(e) => setComplement(e.target.value)} />
-        <TextField label="Itens do pedido" size="small" multiline minRows={2} value={items} onChange={(e) => setItems(e.target.value)} />
-        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1.2 }}>
-          <TextField label="Valor dos itens" size="small" value={subtotal} onChange={(e) => setSubtotal(e.target.value)} inputMode="decimal" />
+        <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: "#78716C", mt: 0.5 }}>PRODUTOS</Typography>
+        {menu.items.length === 0 && (
+          <Alert severity="info" sx={{ py: 0 }}>Nenhum produto no cardápio. O admin da empresa cadastra na aba “Cardápio”.</Alert>
+        )}
+        <ProductPicker menu={menu} onAdd={(it) => setCart([...cart, it])} />
+        <Cart cart={cart} setCart={setCart} />
+        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.2 }}>
           <TextField label="Taxa de entrega" size="small" value={fee} onChange={(e) => setFee(e.target.value)} inputMode="decimal"
             placeholder={zoneFee != null ? String(zoneFee) : ""}
             helperText={zoneFee != null && fee === "" ? `Bairro: ${money(zoneFee)}` : " "} />
@@ -183,6 +322,12 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones }) {
           )}
         </Box>
         <TextField label="Observações" size="small" value={notes} onChange={(e) => setNotes(e.target.value)} />
+        <Box sx={{ p: 1.5, background: "#FAFAF9", borderRadius: "12px", display: "flex", flexDirection: "column", gap: 0.4 }}>
+          <SummaryLine label="Produtos" value={money(subtotal)} />
+          <SummaryLine label="Taxa de entrega" value={money(feeValue)} />
+          {hasCourierFee && <SummaryLine label="Taxa do motoboy" value="somada ao escolher o motoboy" muted />}
+          <SummaryLine label="Total agora" value={money(subtotal + feeValue)} strong />
+        </Box>
         <FormControlLabel
           control={<Checkbox size="small" checked={saveCustomer} onChange={(e) => setSaveCustomer(e.target.checked)} />}
           label={<Typography sx={{ fontSize: 13 }}>Salvar cliente para o próximo pedido</Typography>}
@@ -206,6 +351,13 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
   const [error, setError] = useState("");
   const [forceReason, setForceReason] = useState("");
   const [showForce, setShowForce] = useState(false);
+  const [lines, setLines] = useState([]);
+
+  useEffect(() => {
+    if (!order) return;
+    supabase.from("delivery_order_items").select("*").eq("order_id", order.id).order("position")
+      .then(({ data }) => setLines(data || []));
+  }, [order]);
 
   useEffect(() => {
     if (!order || !company?.feature_delivery_code) return;
@@ -246,7 +398,32 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
           <InfoField label="Motoboy" value={order.courier?.name || "—"} />
         </Box>
         <InfoField label="Endereço" value={orderAddress(order) || "Sem endereço"} />
-        {order.items && <InfoField label="Itens" value={<span style={{ whiteSpace: "pre-wrap", fontWeight: 500 }}>{order.items}</span>} />}
+        {lines.length > 0 ? (
+          <Box sx={{ p: 1.5, border: "1px solid #E7E5E4", borderRadius: "12px", display: "flex", flexDirection: "column", gap: 0.5 }}>
+            {lines.map((l) => (
+              <Box key={l.id} sx={{ display: "flex", justifyContent: "space-between", gap: 1 }}>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
+                    {l.quantity}x {l.name}{l.variant ? ` (${l.variant})` : ""}{(l.addons || []).map((a) => ` + ${a.name}`).join("")}
+                  </Typography>
+                  {l.notes && <Typography sx={{ fontSize: 11.5, color: "#78716C" }}>{l.notes}</Typography>}
+                </Box>
+                <Typography sx={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{money(l.unit_price * l.quantity)}</Typography>
+              </Box>
+            ))}
+            <Box sx={{ borderTop: "1px solid #F5F5F4", mt: 0.5, pt: 0.7, display: "flex", flexDirection: "column", gap: 0.3 }}>
+              <SummaryLine label="Produtos" value={money(order.subtotal)} />
+              <SummaryLine label="Taxa de entrega" value={money(order.delivery_fee)} />
+              {order.courier_fee != null && <SummaryLine label={`Taxa do motoboy${order.courier?.name ? ` (${order.courier.name})` : ""}`} value={money(order.courier_fee)} />}
+              <SummaryLine label="Total" value={money(order.total)} strong />
+            </Box>
+          </Box>
+        ) : (
+          <>
+            {order.items && <InfoField label="Itens" value={<span style={{ whiteSpace: "pre-wrap", fontWeight: 500 }}>{order.items}</span>} />}
+            {order.courier_fee != null && <InfoField label="Taxa do motoboy (no total)" value={money(order.courier_fee)} />}
+          </>
+        )}
         {order.notes && <Typography sx={{ fontSize: 12.5, color: "#78716C", fontStyle: "italic" }}>{order.notes}</Typography>}
         {order.problem_reason && order.status === "problem" && <Alert severity="warning">Motoboy informou: {order.problem_reason}</Alert>}
         {order.forced_reason && <Alert severity="info">Finalizado manualmente: {order.forced_reason}</Alert>}
@@ -308,7 +485,8 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
 }
 
 // ───────────────────────── Montar / editar saída ─────────────────────────
-function StopList({ stops, setStops }) {
+// fee = taxa do motoboy escolhido (entra no total dos pedidos ainda não entregues).
+function StopList({ stops, setStops, fee }) {
   const move = (i, d) => {
     const next = [...stops];
     [next[i], next[i + d]] = [next[i + d], next[i]];
@@ -323,6 +501,7 @@ function StopList({ stops, setStops }) {
             <Typography sx={{ fontSize: 13, fontWeight: 700 }}>#{o.number} · {o.customer_name}</Typography>
             <Typography sx={{ fontSize: 11.5, color: "#78716C", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {o.address_neighborhood || "Sem bairro"}{!o.lat ? " · sem localização no mapa" : ""}
+              {" · total "}{money(o.status === "delivered" ? o.total : Number(o.subtotal) + Number(o.delivery_fee || 0) + Number(fee || 0))}
             </Typography>
           </Box>
           {o.status === "delivered" ? <StatusChip status="delivered" /> : (
@@ -338,7 +517,7 @@ function StopList({ stops, setStops }) {
   );
 }
 
-function RunDialog({ open, onClose, onDone, couriers, available, run }) {
+function RunDialog({ open, onClose, onDone, couriers, available, run, courierFees }) {
   const settings = useCompanySettings();
   const storePoint = settings?.store_lat ? { lat: settings.store_lat, lng: settings.store_lng } : null;
   // `run` = saída existente (editar) ou null (nova saída com os `available` selecionados).
@@ -386,8 +565,15 @@ function RunDialog({ open, onClose, onDone, couriers, available, run }) {
       <DialogTitle sx={{ fontWeight: 800 }}>{run ? "Editar saída" : "Despachar pedidos"}</DialogTitle>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 1.5, pt: "8px !important" }}>
         <TextField select size="small" label="Motoboy" value={courierId} onChange={(e) => setCourierId(e.target.value)}>
-          {couriers.map((c) => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
+          {couriers.map((c) => (
+            <MenuItem key={c.id} value={c.id}>{c.name}{courierFees[c.id] ? ` · ${money(courierFees[c.id])} por entrega` : ""}</MenuItem>
+          ))}
         </TextField>
+        {courierId && courierFees[courierId] > 0 && (
+          <Alert severity="info" sx={{ py: 0 }}>
+            A taxa de {courier?.name} ({money(courierFees[courierId])}) entra no total de cada pedido desta saída.
+          </Alert>
+        )}
         {groups.length > 0 && (
           <Box sx={{ display: "flex", gap: 0.6, flexWrap: "wrap" }}>
             {groups.map((g) => <Chip key={g.key} size="small" label={`${g.name}: ${g.orders.length}`} />)}
@@ -397,7 +583,7 @@ function RunDialog({ open, onClose, onDone, couriers, available, run }) {
           <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: "#78716C" }}>PARADAS NA ORDEM</Typography>
           <Button size="small" startIcon={<AutoFixHighIcon />} onClick={suggest} disabled={stops.length < 2}>Sugerir ordem</Button>
         </Box>
-        <StopList stops={stops} setStops={setStops} />
+        <StopList stops={stops} setStops={setStops} fee={courierFees[courierId]} />
         {addable.length > 0 && (
           <Box sx={{ display: "flex", gap: 1 }}>
             <TextField select size="small" label="Adicionar pedido" value={addId} onChange={(e) => setAddId(e.target.value)} sx={{ flex: 1 }}>
@@ -427,6 +613,8 @@ export function OrdersTab() {
   const [zones, setZones] = useState([]);
   const [couriers, setCouriers] = useState([]);
   const [company, setCompany] = useState(null);
+  const [menu, setMenu] = useState({ items: [], addons: [] });
+  const [courierFees, setCourierFees] = useState({});
   const [deliveredToday, setDeliveredToday] = useState(0);
   const [selected, setSelected] = useState(new Set());
   const [showNew, setShowNew] = useState(false);
@@ -436,7 +624,7 @@ export function OrdersTab() {
 
   const load = useCallback(async () => {
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-    const [o, r, z, c, comp, d] = await Promise.all([
+    const [o, r, z, c, comp, d, cats, prods, fees] = await Promise.all([
       supabase.from("delivery_orders").select("*, courier:courier_id(name)").eq("company_id", companyId)
         .in("status", COLUMNS).order("created_at"),
       supabase.from("delivery_runs").select("*, courier:courier_id(name)").eq("company_id", companyId)
@@ -446,7 +634,22 @@ export function OrdersTab() {
       supabase.rpc("my_company_settings").maybeSingle(),
       supabase.from("delivery_orders").select("id", { count: "exact", head: true }).eq("company_id", companyId)
         .eq("status", "delivered").gte("delivered_at", startOfDay.toISOString()),
+      supabase.from("product_categories").select("id, name, sort_order, active").eq("company_id", companyId),
+      supabase.from("products").select("*").eq("company_id", companyId).eq("active", true).order("sort_order").order("name"),
+      supabase.rpc("my_courier_fees"),
     ]);
+    // Cardápio do pedido: só produtos ativos de categorias visíveis, na ordem das categorias.
+    const catList = (cats.data || []).slice().sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
+    const catIndex = new Map(catList.map((cat, i) => [cat.id, i]));
+    const hidden = new Set(catList.filter((cat) => !cat.active).map((cat) => cat.id));
+    const all = prods.data || [];
+    setMenu({
+      items: all.filter((p) => p.kind === "item" && !hidden.has(p.category_id))
+        .map((p) => ({ ...p, category_name: catList.find((cat) => cat.id === p.category_id)?.name || "Outros" }))
+        .sort((a, b) => (catIndex.get(a.category_id) ?? 999) - (catIndex.get(b.category_id) ?? 999)),
+      addons: all.filter((p) => p.kind === "addon"),
+    });
+    setCourierFees(Object.fromEntries((fees.data || []).filter((f) => Number(f.fee) > 0).map((f) => [f.courier_id, Number(f.fee)])));
     setOrders(o.data || []);
     setRuns(r.data || []);
     setZones(z.data || []);
@@ -565,10 +768,11 @@ export function OrdersTab() {
         ))}
       </Box>
 
-      <NewOrderDialog open={showNew} onClose={() => setShowNew(false)} onCreated={load} companyId={companyId} zones={zones} />
+      <NewOrderDialog open={showNew} onClose={() => setShowNew(false)} onCreated={load} companyId={companyId} zones={zones}
+        menu={menu} hasCourierFee={Object.keys(courierFees).length > 0} />
       <OrderDetailDialog order={detail} company={company} onClose={() => setDetail(null)} onChanged={() => { setDetail(null); load(); }} />
       <RunDialog
-        open={runDialog.open} run={runDialog.run} couriers={couriers} available={dispatchable}
+        open={runDialog.open} run={runDialog.run} couriers={couriers} available={dispatchable} courierFees={courierFees}
         onClose={() => setRunDialog({ open: false, run: null })}
         onDone={() => { setSelected(new Set()); load(); }}
       />

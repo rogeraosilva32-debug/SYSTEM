@@ -131,6 +131,19 @@ export function DeliverySettingsTab() {
         </Box>
       </Section>
 
+      <Section title="Taxa do motoboy">
+        <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2 }}>
+          <Box>
+            <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Somar a taxa do motoboy ao total do pedido</Typography>
+            <Typography sx={{ fontSize: 12.5, color: "#78716C", maxWidth: 520 }}>
+              Ao escolher o motoboy no despacho, o valor por entrega dele (Financeiro → Valores do motoboy; vale o próprio
+              dele ou o padrão da empresa) entra no total que o cliente paga, separado da taxa do bairro.
+            </Typography>
+          </Box>
+          <Switch checked={company.courier_fee_on_order ?? true} onChange={(e) => updateCompany({ courier_fee_on_order: e.target.checked })} />
+        </Box>
+      </Section>
+
       <Section title="Bairros atendidos e taxas">
         <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "2fr 1fr 1fr auto" }, gap: 1, mb: 2 }}>
           <TextField size="small" label="Bairro" value={name} onChange={(e) => setName(e.target.value)} />

@@ -6,6 +6,7 @@ import { AssignmentsTab } from "./company/AssignmentsTab";
 import { IntegrationsTab } from "./company/IntegrationsTab";
 import { MessagesTab } from "./company/MessagesTab";
 import { OrdersTab } from "./company/OrdersTab";
+import { MenuTab } from "./company/MenuTab";
 import { LiveMapTab } from "./company/LiveMapTab";
 import { DeliverySettingsTab } from "./company/DeliverySettingsTab";
 import { BrandingTab } from "./company/BrandingTab";
@@ -17,6 +18,7 @@ import { useAuth } from "../context/AuthContext";
 
 const TABS = [
   { key: "orders", label: "Pedidos" },
+  { key: "menu", label: "Cardápio" },
   { key: "live", label: "Mapa ao vivo" },
   { key: "reports", label: "Relatórios" },
   { key: "finance", label: "Financeiro" },
@@ -55,6 +57,7 @@ export default function CompanyAdmin() {
       </Box>
 
       {tab === "orders" && <OrdersTab />}
+      {tab === "menu" && <MenuTab />}
       {tab === "live" && <LiveMapTab />}
       {tab === "reports" && <ReportsTab />}
       {tab === "finance" && <FinanceTab />}

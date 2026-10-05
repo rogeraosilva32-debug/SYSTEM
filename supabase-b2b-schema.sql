@@ -1457,6 +1457,7 @@ begin
     new.run_id := null; new.courier_id := null; new.stop_sequence := null;
     new.delivered_at := null; new.dispatched_at := null; new.forced_reason := null;
     new.delivered_by_code := null; new.route_choice := null;
+    new.courier_fee := null;
     new.created_by := auth.uid();
   end if;
   return new;
@@ -1495,8 +1496,14 @@ begin
      or new.stop_sequence is distinct from old.stop_sequence
      or new.delivered_at is distinct from old.delivered_at
      or new.delivered_by_code is distinct from old.delivered_by_code
-     or new.forced_reason is distinct from old.forced_reason then
+     or new.forced_reason is distinct from old.forced_reason
+     or new.courier_fee is distinct from old.courier_fee then
     raise exception 'Use as funções de despacho/entrega para alterar estes campos.';
+  end if;
+  -- Pedido com produtos: o valor dos itens vem do cardápio (set_order_items).
+  if new.subtotal is distinct from old.subtotal
+     and exists (select 1 from public.delivery_order_items i where i.order_id = old.id) then
+    raise exception 'O valor dos itens vem dos produtos do pedido.';
   end if;
   if new.status is distinct from old.status then
     if old.status in ('delivered', 'cancelled') then
@@ -1617,7 +1624,8 @@ begin
     values (v_company, p_courier, auth.uid(), v_strict) returning id into v_run;
 
   for i in 1 .. array_length(p_order_ids, 1) loop
-    update public.delivery_orders set run_id = v_run, courier_id = p_courier, stop_sequence = i
+    update public.delivery_orders set run_id = v_run, courier_id = p_courier, stop_sequence = i,
+      courier_fee = public.courier_order_fee(p_courier)
       where id = p_order_ids[i];
   end loop;
 
@@ -1652,7 +1660,7 @@ begin
 
   -- Tira da saída o que não está mais na lista (e não foi entregue).
   update public.delivery_orders
-    set run_id = null, courier_id = null, stop_sequence = null,
+    set run_id = null, courier_id = null, stop_sequence = null, courier_fee = null,
         status = case when status in ('on_route', 'problem') then 'ready' else status end,
         dispatched_at = null
     where run_id = p_run and status not in ('delivered', 'cancelled')
@@ -1675,6 +1683,7 @@ begin
     end if;
     v_seq := v_seq + 1;
     update public.delivery_orders set run_id = p_run, courier_id = v_run.courier_id, stop_sequence = v_seq,
+      courier_fee = public.courier_order_fee(v_run.courier_id),
       status = case when v_run.status = 'in_progress' then 'on_route' else status end,
       dispatched_at = case when v_run.status = 'in_progress' then coalesce(dispatched_at, now()) else dispatched_at end
       where id = v_id;
@@ -2474,7 +2483,7 @@ begin
           'problems', (select count(*) from o where status = 'problem'),
           'revenue', coalesce(sum(total), 0),
           'subtotal', coalesce(sum(subtotal), 0),
-          'fees', coalesce(sum(delivery_fee), 0),
+          'fees', coalesce(sum(coalesce(delivery_fee, 0) + coalesce(courier_fee, 0)), 0),
           'avg_ticket', coalesce(round(avg(total), 2), 0),
           'unconfirmed_cash', coalesce(sum(total) filter (where payment_method = 'dinheiro' and not payment_received), 0))
         from d),
@@ -2483,7 +2492,7 @@ begin
           from d group by 1) x), '[]'::jsonb),
       'by_neighborhood', coalesce((select jsonb_agg(x order by x.total desc) from (
           select coalesce(nullif(btrim(address_neighborhood), ''), 'Sem bairro') as key, count(*) as count,
-                 sum(total) as total, sum(coalesce(delivery_fee, 0)) as fees
+                 sum(total) as total, sum(coalesce(delivery_fee, 0) + coalesce(courier_fee, 0)) as fees
           from d group by 1) x), '[]'::jsonb),
       'by_source', coalesce((select jsonb_agg(x order by x.count desc) from (
           select source as key, count(*) as count, sum(total) as total from d group by 1) x), '[]'::jsonb),
@@ -2639,6 +2648,279 @@ language sql stable security definer as $$
   from public.companies c where c.id = public.my_company_id()
 $$;
 grant execute on function public.my_company_settings() to authenticated;
+
+-- =====================================================================
+-- CARDÁPIO — categorias, produtos (com opções de preço) e adicionais.
+-- O admin da empresa gerencia; no pedido o valor vem dos produtos
+-- escolhidos (calculado aqui no banco, não digitado).
+-- =====================================================================
+create table if not exists public.product_categories (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  name text not null check (btrim(name) <> ''),
+  sort_order integer not null default 0,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (company_id, name)
+);
+create index if not exists product_categories_company_idx on public.product_categories(company_id, sort_order);
+alter table public.product_categories enable row level security;
+
+-- kind = 'item' (lanche, bebida...) ou 'addon' (adicional/opcional).
+-- variants = opções de preço do mesmo produto, ex.:
+--   [{"name": "Hambúrguer", "price": 26}, {"name": "Frango ou lombo", "price": 29.5}]
+-- Sem opções, vale o campo price.
+create table if not exists public.products (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  category_id uuid references public.product_categories(id) on delete set null,
+  kind text not null default 'item' check (kind in ('item', 'addon')),
+  name text not null check (btrim(name) <> ''),
+  description text,
+  price numeric(10,2) not null default 0 check (price >= 0),
+  variants jsonb not null default '[]'::jsonb,
+  sort_order integer not null default 0,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists products_company_idx on public.products(company_id, kind, category_id, sort_order);
+alter table public.products enable row level security;
+
+-- Quem monta pedido (admin e supervisor) lê; só o admin altera.
+drop policy if exists product_categories_read on public.product_categories;
+create policy product_categories_read on public.product_categories
+  for select using ((company_id = public.my_company_id() and public.is_order_manager()) or public.is_platform_admin());
+drop policy if exists product_categories_write on public.product_categories;
+create policy product_categories_write on public.product_categories
+  for all using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+  with check (company_id = public.my_company_id() and public.my_company_role() = 'company_admin');
+
+drop policy if exists products_read on public.products;
+create policy products_read on public.products
+  for select using ((company_id = public.my_company_id() and public.is_order_manager()) or public.is_platform_admin());
+drop policy if exists products_write on public.products;
+create policy products_write on public.products
+  for all using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+  with check (company_id = public.my_company_id() and public.my_company_role() = 'company_admin');
+
+-- Valida opções de preço e a categoria (tem de ser da mesma empresa).
+create or replace function public.products_validate()
+returns trigger language plpgsql as $$
+declare v jsonb; v_names text[] := '{}';
+begin
+  new.name := btrim(new.name);
+  new.updated_at := now();
+  if new.variants is null or jsonb_typeof(new.variants) <> 'array' then
+    raise exception 'Opções de preço inválidas.';
+  end if;
+  if new.kind = 'addon' and jsonb_array_length(new.variants) > 0 then
+    raise exception 'Adicional não tem opções de preço.';
+  end if;
+  for v in select * from jsonb_array_elements(new.variants) loop
+    if jsonb_typeof(v) <> 'object' or coalesce(btrim(v->>'name'), '') = ''
+       or jsonb_typeof(v->'price') <> 'number' or (v->>'price')::numeric < 0 then
+      raise exception 'Cada opção precisa de nome e preço (zero ou mais).';
+    end if;
+    if lower(btrim(v->>'name')) = any(v_names) then
+      raise exception 'Opção "%" repetida.', v->>'name';
+    end if;
+    v_names := v_names || lower(btrim(v->>'name'));
+  end loop;
+  -- Com opções, price guarda o menor preço (para listar "a partir de").
+  if jsonb_array_length(new.variants) > 0 then
+    select min((x->>'price')::numeric) into new.price from jsonb_array_elements(new.variants) x;
+  end if;
+  if new.category_id is not null and not exists (
+    select 1 from public.product_categories c where c.id = new.category_id and c.company_id = new.company_id) then
+    raise exception 'Categoria inválida.';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_products_validate on public.products;
+create trigger trg_products_validate before insert or update on public.products
+  for each row execute function public.products_validate();
+
+-- ---------------------------------------------------------------------
+-- Itens do pedido (preço copiado do cardápio na hora do pedido)
+-- ---------------------------------------------------------------------
+create table if not exists public.delivery_order_items (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.delivery_orders(id) on delete cascade,
+  company_id uuid not null references public.companies(id) on delete cascade,
+  product_id uuid references public.products(id) on delete set null,
+  name text not null,
+  variant text,
+  addons jsonb not null default '[]'::jsonb,
+  quantity integer not null check (quantity between 1 and 999),
+  unit_price numeric(10,2) not null check (unit_price >= 0),
+  notes text,
+  position integer not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists delivery_order_items_order_idx on public.delivery_order_items(order_id);
+alter table public.delivery_order_items enable row level security;
+
+-- Só leitura pelo app; gravação pela função set_order_items.
+drop policy if exists delivery_order_items_read on public.delivery_order_items;
+create policy delivery_order_items_read on public.delivery_order_items
+  for select using (
+    (company_id = public.my_company_id() and public.is_order_manager())
+    or public.is_platform_admin()
+    or exists (select 1 from public.delivery_orders o where o.id = order_id and o.courier_id = auth.uid())
+  );
+
+-- Grava os itens de um pedido ainda na fila e recalcula o valor.
+-- p_items: [{"product_id": "...", "variant": "Hambúrguer", "addon_ids": ["..."], "quantity": 2, "notes": "sem cebola"}]
+create or replace function public.set_order_items(p_order_id uuid, p_items jsonb)
+returns numeric language plpgsql security definer as $$
+declare
+  v_order record;
+  e jsonb;
+  p record;
+  a record;
+  v_variant text;
+  v_price numeric;
+  v_addons jsonb;
+  v_addon_total numeric;
+  v_qty integer;
+  v_subtotal numeric;
+  v_pos integer := 0;
+begin
+  select * into v_order from public.delivery_orders where id = p_order_id;
+  if v_order.id is null
+     or not ((v_order.company_id = public.my_company_id() and public.is_order_manager()) or public.is_platform_admin()) then
+    raise exception 'Pedido não encontrado.';
+  end if;
+  if v_order.status not in ('received', 'preparing', 'ready') or v_order.run_id is not null then
+    raise exception 'Só dá para mudar os itens de pedido que ainda não saiu para entrega.';
+  end if;
+  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'Adicione ao menos um produto ao pedido.';
+  end if;
+
+  delete from public.delivery_order_items where order_id = p_order_id;
+
+  for e in select * from jsonb_array_elements(p_items) loop
+    select * into p from public.products
+      where id = nullif(e->>'product_id', '')::uuid and company_id = v_order.company_id
+        and kind = 'item' and active
+        and not exists (select 1 from public.product_categories c where c.id = products.category_id and not c.active);
+    if p.id is null then raise exception 'Produto não encontrado ou fora do cardápio.'; end if;
+
+    v_variant := nullif(btrim(e->>'variant'), '');
+    if jsonb_array_length(p.variants) > 0 then
+      select (x->>'price')::numeric, x->>'name' into v_price, v_variant
+        from jsonb_array_elements(p.variants) x where x->>'name' = v_variant;
+      if v_price is null then raise exception 'Escolha a opção de "%".', p.name; end if;
+    else
+      v_price := p.price; v_variant := null;
+    end if;
+
+    v_addons := '[]'::jsonb; v_addon_total := 0;
+    for a in select pr.id, pr.name, pr.price from public.products pr
+             where pr.id in (select (x #>> '{}')::uuid from jsonb_array_elements(coalesce(e->'addon_ids', '[]'::jsonb)) x)
+               and pr.company_id = v_order.company_id and pr.kind = 'addon' and pr.active
+             order by pr.sort_order, pr.name loop
+      v_addons := v_addons || jsonb_build_object('id', a.id, 'name', a.name, 'price', a.price);
+      v_addon_total := v_addon_total + a.price;
+    end loop;
+    if jsonb_array_length(v_addons) <> jsonb_array_length(coalesce(e->'addon_ids', '[]'::jsonb)) then
+      raise exception 'Adicional não encontrado ou inativo no cardápio.';
+    end if;
+
+    v_qty := coalesce(nullif(e->>'quantity', '')::integer, 1);
+    if v_qty < 1 or v_qty > 999 then raise exception 'Quantidade inválida.'; end if;
+
+    v_pos := v_pos + 1;
+    insert into public.delivery_order_items (order_id, company_id, product_id, name, variant, addons, quantity, unit_price, notes, position)
+      values (p_order_id, v_order.company_id, p.id, p.name, v_variant, v_addons, v_qty,
+              v_price + v_addon_total, nullif(btrim(e->>'notes'), ''), v_pos);
+  end loop;
+
+  select coalesce(sum(i.unit_price * i.quantity), 0) into v_subtotal
+    from public.delivery_order_items i where i.order_id = p_order_id;
+
+  -- Texto legível em "items" (motoboy, mensagens e relatórios usam).
+  update public.delivery_orders set subtotal = v_subtotal,
+    items = (select string_agg(
+               i.quantity || 'x ' || i.name || coalesce(' (' || i.variant || ')', '')
+               || coalesce((select ' + ' || string_agg(x->>'name', ' + ') from jsonb_array_elements(i.addons) x), '')
+               || coalesce(' · ' || i.notes, ''), E'\n' order by i.position)
+             from public.delivery_order_items i where i.order_id = p_order_id)
+    where id = p_order_id;
+  return v_subtotal;
+end;
+$$;
+grant execute on function public.set_order_items(uuid, jsonb) to authenticated;
+
+-- Cria o pedido e os itens numa transação só. Roda com as permissões de
+-- quem chama (as regras de pedidos valem igual a um insert direto).
+create or replace function public.create_delivery_order(p_order jsonb, p_items jsonb)
+returns uuid language plpgsql as $$
+declare v_id uuid;
+begin
+  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'Adicione ao menos um produto ao pedido.';
+  end if;
+  insert into public.delivery_orders (
+    company_id, source, customer_id, customer_name, customer_phone,
+    address_street, address_number, address_complement, address_neighborhood, address_city, lat, lng,
+    delivery_fee, payment_method, change_for, notes)
+  values (
+    public.my_company_id(), coalesce(nullif(p_order->>'source', ''), 'balcao'),
+    nullif(p_order->>'customer_id', '')::uuid, btrim(p_order->>'customer_name'), nullif(p_order->>'customer_phone', ''),
+    nullif(p_order->>'address_street', ''), nullif(p_order->>'address_number', ''), nullif(p_order->>'address_complement', ''),
+    nullif(p_order->>'address_neighborhood', ''), nullif(p_order->>'address_city', ''),
+    nullif(p_order->>'lat', '')::double precision, nullif(p_order->>'lng', '')::double precision,
+    nullif(p_order->>'delivery_fee', '')::numeric, nullif(p_order->>'payment_method', ''),
+    nullif(p_order->>'change_for', '')::numeric, nullif(p_order->>'notes', ''))
+  returning id into v_id;
+  perform public.set_order_items(v_id, p_items);
+  return v_id;
+end;
+$$;
+grant execute on function public.create_delivery_order(jsonb, jsonb) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Taxa do motoboy no pedido: ao despachar, o valor por entrega do motoboy
+-- (o dele ou o padrão da empresa) entra no total do pedido.
+-- ---------------------------------------------------------------------
+alter table public.companies add column if not exists courier_fee_on_order boolean not null default true;
+alter table public.delivery_orders add column if not exists courier_fee numeric(10,2);
+
+-- O total passa a somar a taxa do motoboy (coluna calculada é recriada uma vez).
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'delivery_orders' and column_name = 'total'
+      and generation_expression like '%courier_fee%') then
+    alter table public.delivery_orders drop column if exists total;
+    alter table public.delivery_orders add column total numeric(10,2)
+      generated always as (subtotal + coalesce(delivery_fee, 0) + coalesce(courier_fee, 0)) stored;
+  end if;
+end $$;
+
+create or replace function public.courier_order_fee(p_courier uuid)
+returns numeric language sql stable security definer as $$
+  select nullif(coalesce(r.per_delivery, c.courier_per_delivery, 0), 0)
+  from public.profiles p
+  join public.companies c on c.id = p.company_id and c.courier_fee_on_order
+  left join public.courier_rates r on r.courier_id = p.id
+  where p.id = p_courier
+$$;
+revoke execute on function public.courier_order_fee(uuid) from public, anon, authenticated;
+
+-- Para a tela de despacho mostrar a taxa de cada motoboy antes de confirmar.
+create or replace function public.my_courier_fees()
+returns table(courier_id uuid, fee numeric) language sql stable security definer as $$
+  select p.id, public.courier_order_fee(p.id)
+  from public.profiles p
+  where p.company_id = public.my_company_id() and p.company_role = 'collaborator' and public.is_order_manager()
+$$;
+grant execute on function public.my_courier_fees() to authenticated;
 
 -- Atualiza o cache do Supabase (evita "Could not find the column ... in the schema cache").
 notify pgrst, 'reload schema';
