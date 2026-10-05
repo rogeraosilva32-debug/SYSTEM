@@ -1,20 +1,27 @@
 -- Cardápio da Pantera Lanches (fotos enviadas em 05/10/2026).
 -- Como usar: rode DEPOIS do supabase-b2b-schema.sql, no SQL Editor do
--- Supabase. Troque o nome abaixo se a empresa estiver cadastrada com
--- outro nome. Pode rodar de novo: produto que já existe (mesmo nome) é
--- pulado, então preços alterados pela empresa não são sobrescritos.
+-- Supabase. Se só existe uma empresa cadastrada, o cardápio vai para ela.
+-- Se houver mais de uma, escreva em v_company_name um pedaço do nome
+-- dela (o erro lista as empresas cadastradas). Pode rodar de novo:
+-- produto que já existe (mesmo nome) é pulado, então preços alterados
+-- pela empresa não são sobrescritos.
 do $$
 declare
-  v_company_name text := 'Pantera Lanches';   -- << nome da empresa no sistema
+  v_company_name text := '';   -- << pedaço do nome da empresa (vazio = a única empresa cadastrada)
   v_company uuid;
   v_n int;
   v_cat uuid;
   r record;
 begin
   select count(*), min(id::text)::uuid into v_n, v_company
-    from public.companies where lower(name) like '%' || lower(v_company_name) || '%';
-  if v_n = 0 then raise exception 'Empresa "%" não encontrada. Ajuste v_company_name.', v_company_name; end if;
-  if v_n > 1 then raise exception 'Mais de uma empresa com "%" no nome. Use o nome completo.', v_company_name; end if;
+    from public.companies where lower(name) like '%' || lower(btrim(v_company_name)) || '%';
+  if v_n <> 1 then
+    raise exception '% Empresas cadastradas: %',
+      case when v_n = 0 then format('Nenhuma empresa com "%s" no nome.', v_company_name)
+           when btrim(v_company_name) = '' then 'Há mais de uma empresa: escreva um pedaço do nome em v_company_name.'
+           else format('Mais de uma empresa com "%s" no nome: use um pedaço mais específico.', v_company_name) end,
+      coalesce((select string_agg(name, ', ' order by name) from public.companies), 'nenhuma');
+  end if;
 
   for r in
     select * from (values
