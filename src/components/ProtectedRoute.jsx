@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ProfileLoadFallback from "./ProfileLoadFallback";
+import BrandLoader from "./BrandLoader";
 
 // Guarda base: só exige estar logado. Não exige `activated` — quem ainda não
 // resgatou uma chave de licença/convite passa por aqui normalmente e é
@@ -10,7 +11,7 @@ export default function ProtectedRoute({ children }) {
   const { user, profile, loading, activated } = useAuth();
   const location = useLocation();
 
-  if (loading) return null;
+  if (loading) return <BrandLoader instant />;
 
   if (!user) return <Navigate to="/login" replace />;
 

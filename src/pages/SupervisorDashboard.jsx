@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { Box, Table, TableHead, TableRow, TableCell, TableBody, CircularProgress } from "@mui/material";
 import AppShell from "../components/AppShell";
+import ReceiptLongOutlinedIcon from "@mui/icons-material/ReceiptLongOutlined";
+import MapOutlinedIcon from "@mui/icons-material/MapOutlined";
+import GroupOutlinedIcon from "@mui/icons-material/GroupOutlined";
+import EventNoteOutlinedIcon from "@mui/icons-material/EventNoteOutlined";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlineOutlined";
+import useTab from "../hooks/useTab";
 import { AssignmentsTab } from "./company/AssignmentsTab";
 import { MessagesTab } from "./company/MessagesTab";
 import { OrdersTab } from "./company/OrdersTab";
@@ -9,11 +15,11 @@ import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
 
 const TABS = [
-  { key: "orders", label: "Pedidos" },
-  { key: "live", label: "Mapa ao vivo" },
-  { key: "team", label: "Minha equipe" },
-  { key: "assignments", label: "Designações" },
-  { key: "messages", label: "Mensagens" },
+  { key: "orders", label: "Pedidos", icon: <ReceiptLongOutlinedIcon /> },
+  { key: "live", label: "Mapa ao vivo", icon: <MapOutlinedIcon /> },
+  { key: "messages", label: "Mensagens", icon: <ChatBubbleOutlineIcon />, unread: true },
+  { key: "team", label: "Minha equipe", icon: <GroupOutlinedIcon /> },
+  { key: "assignments", label: "Designações", icon: <EventNoteOutlinedIcon /> },
 ];
 
 // Um supervisor enxerga só os colaboradores atribuídos a ele — a tabela de
@@ -48,25 +54,10 @@ function MyTeam({ myId }) {
 
 export default function SupervisorDashboard() {
   const { profile } = useAuth();
-  const [tab, setTab] = useState("orders");
+  const [tab, setTab] = useTab(TABS.map((t) => t.key), "orders");
 
   return (
-    <AppShell title="Supervisão">
-      <Box sx={{ display: "flex", gap: 0.5, mb: 3, borderBottom: "1px solid #E7E5E4", overflowX: "auto" }}>
-        {TABS.map((t) => (
-          <Box
-            key={t.key} onClick={() => setTab(t.key)}
-            sx={{
-              px: 2, py: 1.2, cursor: "pointer", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
-              color: tab === t.key ? "#1C1917" : "#A8A29E",
-              borderBottom: tab === t.key ? "2px solid #1C1917" : "2px solid transparent",
-            }}
-          >
-            {t.label}
-          </Box>
-        ))}
-      </Box>
-
+    <AppShell title={TABS.find((t) => t.key === tab)?.label} nav={{ items: TABS, current: tab, onSelect: setTab }}>
       {tab === "orders" && <OrdersTab />}
       {tab === "live" && <LiveMapTab />}
       {tab === "team" && <MyTeam myId={profile.id} />}

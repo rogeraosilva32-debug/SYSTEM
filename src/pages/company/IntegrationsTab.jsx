@@ -8,6 +8,7 @@ import AddIcon from "@mui/icons-material/Add";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import SyncIcon from "@mui/icons-material/Sync";
+import CollapsibleSection from "../../components/CollapsibleSection";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { generateCode } from "../../utils/codeGenerator";
@@ -60,8 +61,7 @@ function ApiKeysSection() {
   };
 
   return (
-    <Box sx={{ mb: 4 }}>
-      <Typography sx={{ fontWeight: 800, fontSize: 15, mb: 0.5 }}>Chaves de API (saída de dados)</Typography>
+    <Box>
       <Typography sx={{ fontSize: 12.5, color: "#78716C", mb: 2 }}>
         Use uma chave pra ler os dados da sua empresa (colaboradores, serviços, designações) de outro
         sistema. Veja como usar na seção de documentação abaixo.
@@ -211,7 +211,6 @@ function CrmIntegrationSection() {
 
   return (
     <Box>
-      <Typography sx={{ fontWeight: 800, fontSize: 15, mb: 0.5 }}>Importar de um CRM (entrada de dados)</Typography>
       <Typography sx={{ fontSize: 12.5, color: "#78716C", mb: 2 }}>
         Configure a API do seu CRM pra puxar colaboradores e serviços de lá automaticamente,
         em vez de cadastrar tudo manualmente aqui.
@@ -253,10 +252,16 @@ function CrmIntegrationSection() {
 
 export function IntegrationsTab() {
   return (
-    <Box>
-      <ApiKeysSection />
-      <Box sx={{ borderTop: "1px solid #E7E5E4", my: 3 }} />
-      <CrmIntegrationSection />
+    <Box sx={{ maxWidth: 860 }}>
+      <Typography sx={{ fontSize: 13, color: "#78716C", mb: 2 }}>
+        Só para quem liga o sistema a outros programas. Se você não usa, pode ignorar esta tela.
+      </Typography>
+      <CollapsibleSection id="integracoes-api" title="Chaves de API (saída de dados)" summary="Para outro sistema ler os dados da sua empresa">
+        <ApiKeysSection />
+      </CollapsibleSection>
+      <CollapsibleSection id="integracoes-crm" title="Importar de um CRM (entrada de dados)" summary="Puxar colaboradores e serviços de outro sistema">
+        <CrmIntegrationSection />
+      </CollapsibleSection>
     </Box>
   );
 }

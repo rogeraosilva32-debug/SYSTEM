@@ -3,6 +3,7 @@ import {
   Box, Typography, Button, TextField, CircularProgress, Alert, Chip, MenuItem,
   Table, TableHead, TableRow, TableCell, TableBody,
 } from "@mui/material";
+import CollapsibleSection from "../../components/CollapsibleSection";
 import supabase from "../../services/supabase";
 import { money } from "../../utils/delivery";
 import { today, formatDate, downloadCsv } from "../../utils/reports";
@@ -205,8 +206,8 @@ export function CompanyBilling({ company, onUpdated }) {
     if (!error) onUpdated(data);
   };
   return (
-    <Box sx={{ border: "1px solid #E7E5E4", borderRadius: "14px", p: 2.5, background: "#fff", mb: 3 }}>
-      <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#78716C", mb: 1.5 }}>COBRANÇA DA LICENÇA</Typography>
+    <CollapsibleSection id="plataforma-cobranca" title="Cobrança da licença"
+      summary={`${money(company.monthly_price || 0)} por mês · vence dia ${company.billing_day ?? 10} · ${company.grace_days ?? 5} dias de tolerância`}>
       {msg && <Alert severity={msg.type} sx={{ mb: 1.5 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr auto" }, gap: 1 }}>
         <TextField size="small" label="Mensalidade (R$)" value={form.monthly_price} onChange={(e) => setForm({ ...form, monthly_price: e.target.value })} />
@@ -217,7 +218,7 @@ export function CompanyBilling({ company, onUpdated }) {
         <Button variant="outlined" onClick={save}>Salvar</Button>
       </Box>
       <CompanyInvoices companyId={company.id} />
-    </Box>
+    </CollapsibleSection>
   );
 }
 

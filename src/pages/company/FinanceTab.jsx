@@ -271,7 +271,7 @@ function Settlements({ companyId }) {
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
       {saved && <Alert severity="success" sx={{ mb: 2 }}>{saved}</Alert>}
 
-      <Section title="Novo acerto">
+      <Section title="Novo acerto" collapsible id="financeiro-novo-acerto" summary="Calcular e fechar o acerto de um motoboy num período">
         <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1.5fr 1fr 1fr auto" }, gap: 1, mb: 1.5 }}>
           <TextField select size="small" label="Motoboy" value={courier} onChange={(e) => { setCourier(e.target.value); setPreview(null); }}>
             {couriers.map((c) => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
@@ -426,7 +426,7 @@ function Rates({ companyId }) {
         </Box>
       </Section>
 
-      <Section title="Valor próprio por motoboy">
+      <Section title="Valor próprio por motoboy" collapsible id="financeiro-valor-proprio" summary="Só para quem ganha diferente do padrão da empresa">
         <Typography sx={{ fontSize: 12.5, color: "#78716C", mb: 1.5 }}>Em branco = usa o padrão. Salva ao sair do campo.</Typography>
         {couriers.length === 0 && <Typography sx={{ fontSize: 13, color: "#A8A29E" }}>Nenhum motoboy cadastrado.</Typography>}
         {couriers.map((c) => {

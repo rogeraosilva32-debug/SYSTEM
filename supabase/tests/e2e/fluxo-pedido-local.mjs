@@ -31,7 +31,7 @@ await page.getByLabel('E-mail').fill('a1@t');
 await page.getByLabel('Senha').fill('senha123');
 await page.getByRole('button', { name: /^entrar$/i }).click();
 await page.waitForLoadState('networkidle');
-await page.getByText('Pedidos', { exact: true }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Pedidos', exact: true }).click();
 
 // ───────── Entrega: campos de entrega aparecem e são exigidos ─────────
 await page.getByRole('button', { name: 'Novo pedido' }).click();

@@ -676,3 +676,11 @@ aparece o detalhe: antes/depois de cada campo, IP, aparelho e e-mail.
 - Só a plataforma lê; ninguém grava ou apaga direto. Chaves e códigos de
   convite aparecem só como "alterado". O app grava no máximo 30 avisos por
   minuto por pessoa. Guarda 180 dias (limpeza diária pelo pg_cron, se houver).
+
+## 37. Menu lateral, telas mais simples e app fluido
+
+- **Menu lateral**: as abas de cima viraram um menu vertical à esquerda, agrupado (Operação, Loja, Equipe, Gestão, Avançado). No computador ele pode ser recolhido só para ícones; no celular abre pelo botão ☰. A aba aberta fica no endereço (`?aba=`), então recarregar não volta para o início. Vale para admin, supervisor, motoboy/colaborador e plataforma.
+- **Mostrar / esconder**: formulários grandes (ajustes de entrega, adicionais, categorias, integrações, novo acerto, cobrança e recursos da empresa na plataforma) ficam em seções recolhíveis com um resumo de uma linha. Cada aparelho lembra quais seções o usuário deixou abertas. Campos raros do despacho automático ficam em "Mostrar opções avançadas".
+- **Mensagens**: lista de conversas com busca, não lidas primeiro e contador; respostas rápidas com um toque; "Aviso para todos" manda a mesma mensagem (criptografada) para cada conversa; no celular é uma tela por vez. O menu mostra quantas mensagens não lidas há.
+- **Plataforma — Visão geral**: nova tela inicial com números do dia (pedidos, faturamento das lojas, motoboys em expediente), faturas vencidas, erros e quedas de conexão das últimas 24 h, empresas que precisam de atenção (problemas no log, vagas cheias, sem pedidos há 7 dias) e a tabela "Empresas hoje". Usa a função `platform_overview()` (rode o `supabase-b2b-schema.sql` de novo).
+- **App instalado sem piscar**: a cor do tema e o fundo inicial são os mesmos (`#FAFAF9`), então a barra do celular não alterna preto/branco ao recarregar. A tela de carregamento é um hambúrguer levando mordidas, já desenhado no `index.html` (aparece antes do JavaScript). As telas do perfil logado são pré-carregadas e a troca de tela só faz um leve fade, sem a página sumir.

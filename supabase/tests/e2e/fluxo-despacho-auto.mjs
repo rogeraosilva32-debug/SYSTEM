@@ -9,6 +9,12 @@ mkdirSync(SHOTS, { recursive: true });
 const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q.replace(/"/g, '\\"')}"`).toString().trim();
 const APP = 'http://localhost:4173';
 const errors = [];
+const expand = async (p, title) => {
+  const h = p.locator('[role=button][aria-expanded]').filter({ hasText: new RegExp('^' + title) }).first();
+  await h.waitFor();
+  if ((await h.getAttribute('aria-expanded')) === 'false') await h.click();
+  await p.waitForTimeout(300);
+};
 const check = (label, ok) => { console.log(ok ? '✓' : '✗', label); if (!ok) errors.push(`falhou: ${label}`); };
 const A = 'aaaaaaaa-0000-0000-0000-000000000000';
 
@@ -38,7 +44,8 @@ async function open(email, geo) {
 
 // ───────── Admin liga o despacho automático ─────────
 const admin = await open('a1@t');
-await admin.getByText('Entregas: ajustes', { exact: true }).click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Ajustes de entrega', exact: true }).click();
+await expand(admin, 'Despacho automático');
 await admin.getByText('Despachar sozinho para os motoboys em expediente').waitFor();
 await admin.getByLabel('Máximo de entregas por saída').fill('2');
 await admin.getByRole('button', { name: 'Salvar limites' }).click();
@@ -60,7 +67,7 @@ check('saída automática com o mais antigo primeiro e o vizinho',
 check('pedido longe fica na fila', sql(`select courier_id is null from delivery_orders where customer_name = 'Bruno Lima'`) === 't');
 
 // ───────── Admin vê o expediente e a saída automática ─────────
-await admin.getByText('Pedidos', { exact: true }).click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Pedidos', exact: true }).click();
 await admin.getByText('EM EXPEDIENTE', { exact: true }).waitFor();
 await admin.getByText('Saída aguardando').waitFor();
 check('fila mostra a saída como automática', await admin.getByText('Automática', { exact: true }).isVisible());

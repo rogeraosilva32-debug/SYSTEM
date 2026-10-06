@@ -10,6 +10,12 @@ const APP = 'http://localhost:4173';
 const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q.replace(/"/g, '\\"')}"`).toString().trim();
 const log = (...a) => console.log('•', ...a);
 const errors = [];
+const expand = async (p, title) => {
+  const h = p.locator('[role=button][aria-expanded]').filter({ hasText: new RegExp('^' + title) }).first();
+  await h.waitFor();
+  if ((await h.getAttribute('aria-expanded')) === 'false') await h.click();
+  await p.waitForTimeout(300);
+};
 
 // Histórico: 6 entregas nos últimos dias (C1 e C2) e posições de C1 hoje.
 sql(`insert into delivery_orders (company_id, customer_name, address_neighborhood, zone_id, subtotal, delivery_fee, payment_method, status, courier_id,
@@ -44,7 +50,7 @@ page.on('console', (m) => { if (m.type() === 'error' && !/ERR_TUNNEL|Failed to l
 
 // ---------------- Admin: relatórios ----------------
 await login(page, 'a1@t');
-await page.getByText('Relatórios', { exact: true }).first().click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Relatórios', exact: true }).click();
 await page.getByText('Faturamento', { exact: true }).first().waitFor();
 log('faturamento 7 dias na tela:', await page.getByText('Faturamento', { exact: true }).locator('xpath=..').locator('p').nth(1).innerText());
 log('no banco:', sql(`select sum(total) from delivery_orders where status='delivered' and created_at > now() - interval '7 days'`));
@@ -58,7 +64,7 @@ await page.waitForTimeout(800);
 log('faturamento hoje:', await page.getByText('Faturamento', { exact: true }).locator('xpath=..').locator('p').nth(1).innerText());
 
 // ---------------- Admin: financeiro ----------------
-await page.getByText('Financeiro', { exact: true }).first().click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Financeiro', exact: true }).click();
 await page.getByText('Conferência do dinheiro dos motoboys').waitFor();
 await page.getByLabel('Valor (R$)').fill('100');
 await page.getByRole('button', { name: 'Lançar' }).click();
@@ -82,6 +88,7 @@ await page.getByText('Valores padrão salvos.').waitFor();
 log('valores no banco:', sql(`select courier_daily_rate||' '||courier_per_delivery||' '||courier_per_km from companies where name='Empresa A'`));
 
 await page.getByText('Acertos dos motoboys', { exact: true }).click();
+await expand(page, 'Novo acerto');
 await page.getByLabel('Motoboy').click();
 await page.getByRole('option', { name: 'C1' }).click();
 await page.getByRole('button', { name: 'Calcular' }).click();
@@ -107,17 +114,17 @@ await page.screenshot({ path: `${SHOTS}/23-motoboy-ganhos.png`, fullPage: true }
 // ---------------- Plataforma ----------------
 await login(page, 'p@t');
 await page.getByText('Empresa A').first().click();
-await page.getByText('COBRANÇA DA LICENÇA').waitFor();
+await expand(page, 'Cobrança da licença');
 await page.getByText('FATURAS DESTA EMPRESA').waitFor();
 await page.getByLabel('Mensalidade (R$)').fill('149,90');
 await page.getByLabel('Dia de vencimento (1–28)').fill('5');
-await page.getByText('COBRANÇA DA LICENÇA').locator('xpath=..').getByRole('button', { name: 'Salvar' }).click();
+await page.getByRole('button', { name: 'Salvar', exact: true }).click();
 await page.getByText('Cobrança salva.').waitFor();
-await page.getByText('Relatórios', { exact: true }).first().click();
+await page.getByText('Relatórios', { exact: true }).click();
 await page.getByText('Faturamento', { exact: true }).first().waitFor();
 log('plataforma vê relatório da empresa: ok');
 await page.getByText('Todas as empresas').click();
-await page.getByText('Faturas', { exact: true }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Faturas', exact: true }).click();
 await page.getByLabel('Mês').fill('2026-09');
 await page.getByRole('button', { name: 'Gerar faturas do mês' }).click();
 await page.getByText(/fatura\(s\) gerada\(s\)/).waitFor();
@@ -125,7 +132,7 @@ await page.getByRole('button', { name: 'Suspender inadimplentes' }).click();
 await page.getByText(/suspensa\(s\) por atraso|Nenhuma empresa com atraso/).waitFor();
 log('faturas e situação:', sql(`select string_agg(c.name||' '||i.amount||' venc '||i.due_date||' → '||c.status, '; ') from license_invoices i join companies c on c.id=i.company_id`));
 await page.screenshot({ path: `${SHOTS}/24-plataforma-faturas.png`, fullPage: true });
-await page.getByText('Uso de licenças', { exact: true }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Uso de licenças', exact: true }).click();
 await page.getByText('Vagas usadas', { exact: true }).waitFor();
 log('uso de licenças:', (await page.getByRole('row').filter({ hasText: 'Empresa A' }).innerText()).replace(/\s+/g, ' '));
 await page.screenshot({ path: `${SHOTS}/25-plataforma-uso.png`, fullPage: true });
@@ -145,10 +152,12 @@ if (suspensa) {
 
 // ---------------- Admin: abas do financeiro; celular ----------------
 await page.setViewportSize({ width: 390, height: 844 });
-await page.getByText('Financeiro', { exact: true }).first().click();
+await page.getByRole('button', { name: 'Abrir menu' }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Financeiro', exact: true }).click();
 await page.getByText('Caixa do dia', { exact: true }).waitFor();
 log('admin da empresa sem aba Licença/Turnos:', await page.getByText(/^(Licença|Turnos)$/).count() === 0);
-await page.getByText('Relatórios', { exact: true }).first().click();
+await page.getByRole('button', { name: 'Abrir menu' }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Relatórios', exact: true }).click();
 await page.getByText('Faturamento', { exact: true }).first().waitFor();
 const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
 log('rolagem horizontal no celular:', overflow);

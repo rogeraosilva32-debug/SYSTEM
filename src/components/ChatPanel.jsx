@@ -12,6 +12,19 @@ const EMOJIS = [
   "📦", "🚗", "🏠", "📞", "💬", "🎉", "❤️", "😴", "🤝", "👋",
 ];
 
+// Respostas rápidas: um toque envia. Cada lado tem as suas.
+const QUICK_STAFF = ["Pedido pronto, pode vir buscar", "Me liga, por favor", "Volta para a loja", "Ok, obrigado!"];
+const QUICK_COURIER = ["A caminho", "Cheguei no cliente", "Cliente não atende", "Trânsito, vou atrasar", "Ok!"];
+
+function dayLabel(iso) {
+  const d = new Date(iso);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return "Hoje";
+  const y = new Date(today); y.setDate(today.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return "Ontem";
+  return d.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit" });
+}
+
 function formatTime(iso) {
   const d = new Date(iso);
   const today = new Date();
@@ -87,7 +100,9 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
       const unreadIds = (rows || []).filter((m) => !m[unreadField]).map((m) => m.id);
       if (unreadIds.length > 0) {
         // O builder do supabase só envia ao ser "aguardado": sem o then, nada era gravado.
-        supabase.from("chat_messages").update({ [unreadField]: true }).in("id", unreadIds).then(() => {});
+        // Avisa o menu e a lista de conversas para recontar as não lidas.
+        supabase.from("chat_messages").update({ [unreadField]: true }).in("id", unreadIds)
+          .then(() => window.dispatchEvent(new Event("chat-read")));
       }
 
       // Só assina tempo real DEPOIS do histórico já estar na tela — evita
@@ -103,7 +118,8 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
             return [...(prev || []), { ...payload.new, text }];
           });
           if (payload.new.sender_id !== profile.id) {
-            supabase.from("chat_messages").update({ [unreadField]: true }).eq("id", payload.new.id).then(() => {});
+            supabase.from("chat_messages").update({ [unreadField]: true }).eq("id", payload.new.id)
+              .then(() => window.dispatchEvent(new Event("chat-read")));
           }
         })
         .subscribe();
@@ -120,11 +136,11 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSend = async () => {
-    const text = input.trim();
+  const handleSend = async (quick) => {
+    const text = (typeof quick === "string" ? quick : input).trim();
     if (!text || !roomKey || sending) return;
     setSending(true);
-    setInput("");
+    if (typeof quick !== "string") setInput("");
 
     let error;
     try {
@@ -140,7 +156,7 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
     setSending(false);
     if (error) {
       console.warn("Falha ao enviar mensagem:", error.message);
-      setInput(text); // devolve o texto pro campo pra não perder o que a pessoa escreveu
+      if (typeof quick !== "string") setInput(text); // devolve o texto pro campo pra não perder o que a pessoa escreveu
       return;
     }
 
@@ -163,7 +179,7 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
   };
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: 480, border: "1px solid #E7E5E4", borderRadius: "14px", overflow: "hidden", background: "#fff" }}>
+    <Box sx={{ display: "flex", flexDirection: "column", height: { xs: "calc(100dvh - 190px)", sm: 520 }, minHeight: 380, border: "1px solid #E7E5E4", borderRadius: "14px", overflow: "hidden", background: "#fff" }}>
       {roomLabel && (
         <Box sx={{ px: 2, py: 1.3, borderBottom: "1px solid #E7E5E4", background: "#FAFAF9" }}>
           <Typography sx={{ fontWeight: 700, fontSize: 13.5 }}>{roomLabel}</Typography>
@@ -185,10 +201,16 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
             Nenhuma mensagem ainda. Diga oi 👋
           </Typography>
         ) : (
-          messages.map((m) => {
+          messages.map((m, i) => {
             const mine = m.sender_id === profile.id;
+            const newDay = i === 0 || new Date(messages[i - 1].created_at).toDateString() !== new Date(m.created_at).toDateString();
             return (
               <Box key={m.id} sx={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start" }}>
+                {newDay && (
+                  <Typography sx={{ alignSelf: "center", fontSize: 11, fontWeight: 700, color: "#78716C", background: "#F5F5F4", borderRadius: "10px", px: 1.2, py: 0.3, my: 1, textTransform: "capitalize" }}>
+                    {dayLabel(m.created_at)}
+                  </Typography>
+                )}
                 {!mine && (
                   <Typography sx={{ fontSize: 10.5, color: "#A8A29E", fontWeight: 700, mb: 0.2, ml: 0.5 }}>
                     {senderNames[m.sender_id] || "—"}
@@ -212,7 +234,21 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
         <div ref={bottomRef} />
       </Box>
 
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, p: 1.2, borderTop: "1px solid #E7E5E4" }}>
+      {!loadError && roomKey && (
+        <Box sx={{ display: "flex", gap: 0.7, px: 1.2, pt: 1, overflowX: "auto", borderTop: "1px solid #E7E5E4", "&::-webkit-scrollbar": { display: "none" } }}>
+          {(isStaff ? QUICK_STAFF : QUICK_COURIER).map((q) => (
+            <Box key={q} component="button" type="button" disabled={sending} onClick={() => handleSend(q)}
+              sx={{
+                font: "inherit", flexShrink: 0, border: "1px solid #E7E5E4", background: "#FAFAF9", borderRadius: "999px", px: 1.4, py: 0.6,
+                fontSize: 12.5, fontWeight: 600, color: "#44403C", cursor: "pointer", whiteSpace: "nowrap",
+                "&:hover": { background: "#F0EFEE" }, "&:disabled": { opacity: 0.5 },
+              }}>
+              {q}
+            </Box>
+          ))}
+        </Box>
+      )}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, p: 1.2 }}>
         <IconButton size="small" onClick={(e) => setEmojiAnchor(e.currentTarget)}>
           <EmojiEmotionsOutlinedIcon sx={{ fontSize: 20, color: "#78716C" }} />
         </IconButton>

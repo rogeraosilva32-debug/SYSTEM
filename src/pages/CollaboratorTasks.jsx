@@ -9,7 +9,6 @@ import CheckIcon from "@mui/icons-material/Check";
 import DirectionsIcon from "@mui/icons-material/Directions";
 import NearMeIcon from "@mui/icons-material/NearMe";
 import AppShell from "../components/AppShell";
-import CollaboratorNav from "../components/CollaboratorNav";
 import RouteMap from "../components/RouteMap";
 import InfoField from "../components/InfoField";
 import SignaturePad from "../components/SignaturePad";
@@ -125,7 +124,6 @@ export default function CollaboratorTasks() {
 
   return (
     <AppShell title="Minhas tarefas">
-      <CollaboratorNav />
       {tasks === null ? (
         <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>
       ) : tasks.length === 0 ? (

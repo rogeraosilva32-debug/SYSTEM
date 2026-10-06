@@ -4649,6 +4649,62 @@ grant execute on function public.log_client_event(text, text, text, text, jsonb,
 grant execute on function public.platform_system_log(uuid, text[], text[], text, timestamptz, bigint, bigint, integer) to authenticated;
 
 -- ---------------------------------------------------------------------
+-- Visão geral da plataforma (06/10/2026): números do dia de todas as
+-- empresas numa chamada só, para a primeira tela do administrador.
+-- ---------------------------------------------------------------------
+create or replace function public.platform_overview()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  v_today timestamptz := date_trunc('day', now() at time zone 'America/Sao_Paulo') at time zone 'America/Sao_Paulo';
+  v jsonb;
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+
+  with per_company as (
+    select c.id, c.name, c.status, c.seats_limit, c.created_at,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.created_at >= v_today) as orders_today,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.created_at >= v_today and o.status = 'delivered') as delivered_today,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.created_at >= v_today and o.status = 'cancelled') as cancelled_today,
+      (select coalesce(sum(o.total), 0) from public.delivery_orders o where o.company_id = c.id and o.created_at >= v_today and o.status = 'delivered') as revenue_today,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.status in ('received', 'preparing', 'ready', 'on_route', 'problem')) as open_now,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.status = 'problem') as problems_now,
+      (select count(*) from public.courier_shifts s where s.company_id = c.id and s.ended_at is null) as couriers_on_shift,
+      (select count(*) from public.profiles p where p.company_id = c.id and p.company_role in ('collaborator', 'supervisor')) as seats_used,
+      (select max(o.created_at) from public.delivery_orders o where o.company_id = c.id) as last_order_at,
+      (select count(*) from public.license_invoices i where i.company_id = c.id and i.status = 'pending' and i.due_date < current_date) as overdue_invoices,
+      (select coalesce(sum(i.amount), 0) from public.license_invoices i where i.company_id = c.id and i.status = 'pending' and i.due_date < current_date) as overdue_amount
+    from public.companies c
+  )
+  select jsonb_build_object(
+    'companies', jsonb_build_object(
+      'total', (select count(*) from per_company),
+      'active', (select count(*) from per_company where status = 'active'),
+      'suspended', (select count(*) from per_company where status = 'suspended')),
+    'today', jsonb_build_object(
+      'orders', (select coalesce(sum(orders_today), 0) from per_company),
+      'delivered', (select coalesce(sum(delivered_today), 0) from per_company),
+      'cancelled', (select coalesce(sum(cancelled_today), 0) from per_company),
+      'revenue', (select coalesce(sum(revenue_today), 0) from per_company),
+      'open_now', (select coalesce(sum(open_now), 0) from per_company),
+      'problems_now', (select coalesce(sum(problems_now), 0) from per_company),
+      'couriers_on_shift', (select coalesce(sum(couriers_on_shift), 0) from per_company)),
+    'billing', jsonb_build_object(
+      'overdue_companies', (select count(*) from per_company where overdue_invoices > 0),
+      'overdue_amount', (select coalesce(sum(overdue_amount), 0) from per_company)),
+    'log_24h', jsonb_build_object(
+      'errors', (select count(*) from public.system_log where created_at > now() - interval '24 hours' and level in ('error', 'critical')),
+      'warnings', (select count(*) from public.system_log where created_at > now() - interval '24 hours' and level = 'warning'),
+      'failed_logins', (select count(*) from public.system_log where created_at > now() - interval '24 hours' and action = 'login_failed'),
+      'offline_events', (select count(*) from public.system_log where created_at > now() - interval '24 hours' and action in ('connection_restored', 'server_unreachable', 'gps_lost'))),
+    'per_company', coalesce((select jsonb_agg(to_jsonb(pc) order by pc.status, pc.orders_today desc, pc.name) from per_company pc), '[]'::jsonb),
+    'generated_at', now())
+  into v;
+  return v;
+end;
+$$;
+grant execute on function public.platform_overview() to authenticated;
+
+-- ---------------------------------------------------------------------
 -- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).
 -- O Supabase dá EXECUTE de toda função para anon. Aqui quem já podia
 -- (logado) continua podendo, e o visitante sem login só chama as funções

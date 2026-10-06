@@ -33,7 +33,7 @@ export default defineConfig({
         short_name: 'ServiçoApp',
         description: 'Gestão de colaboradores, serviços e designações de atendimento.',
         lang: 'pt-BR',
-        theme_color: '#1C1917',
+        theme_color: '#FAFAF9',
         background_color: '#FAFAF9',
         display: 'standalone',
         start_url: '/',

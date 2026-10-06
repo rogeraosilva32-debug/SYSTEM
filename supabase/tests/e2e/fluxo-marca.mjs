@@ -11,6 +11,12 @@ const APP = 'http://localhost:4173';
 const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q.replace(/"/g, '\\"')}"`).toString().trim();
 const log = (...a) => console.log('•', ...a);
 const errors = [];
+const expand = async (p, title) => {
+  const h = p.locator('[role=button][aria-expanded]').filter({ hasText: new RegExp('^' + title) }).first();
+  await h.waitFor();
+  if ((await h.getAttribute('aria-expanded')) === 'false') await h.click();
+  await p.waitForTimeout(300);
+};
 
 async function login(page, email) {
   await page.goto(APP + '/login');
@@ -29,7 +35,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 await login(page, 'p@t');
 log('plataforma em', page.url().replace(APP, ''));
 await page.getByText('Empresa A').first().click();
-await page.getByText('RECURSOS LIBERADOS PARA ESTA EMPRESA').waitFor();
+await expand(page, 'Recursos liberados');
 await page.getByText('Marca própria', { exact: true }).locator('xpath=../..').locator('input[type=checkbox]').click();
 await page.getByText('Código de finalização de entrega', { exact: true }).locator('xpath=../..').locator('input[type=checkbox]').click();
 await page.waitForTimeout(700);
@@ -39,7 +45,7 @@ await page.context().clearCookies(); await page.evaluate(() => localStorage.clea
 
 // Admin da empresa
 await login(page, 'a1@t');
-await page.getByText('Marca', { exact: true }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Marca', exact: true }).click();
 await page.getByText('Logo horizontal').waitFor();
 const slot = (title) => page.getByText(title, { exact: true }).locator('xpath=..');
 // formato errado no ícone (JPG onde só aceita PNG)

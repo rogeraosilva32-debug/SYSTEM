@@ -62,7 +62,7 @@ check('saída do sistema registrada', sql(`select count(*) from system_log where
 
 // ---------------- Plataforma lê o log ----------------
 await login(page, 'p@t');
-await page.getByText('Log do sistema', { exact: true }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Log do sistema', exact: true }).click();
 await page.getByTestId('log-row').first().waitFor();
 const rows = await page.getByTestId('log-row').count();
 log('linhas na tela:', rows);

@@ -6,6 +6,12 @@ const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q
 const APP = 'http://localhost:4173';
 const log = (...a) => console.log('•', ...a);
 const errors = [];
+const expand = async (p, title) => {
+  const h = p.locator('[role=button][aria-expanded]').filter({ hasText: new RegExp('^' + title) }).first();
+  await h.waitFor();
+  if ((await h.getAttribute('aria-expanded')) === 'false') await h.click();
+  await p.waitForTimeout(300);
+};
 const cont = (p) => p.getByRole('button', { name: 'Continuar' }).click();
 
 async function mockExternal(ctx) {
@@ -32,7 +38,7 @@ async function login(page, email) {
 }
 function watch(page, who) {
   page.on('pageerror', (e) => errors.push(`${who}: ${e.message}`));
-  page.on('console', (m) => { if (m.type() === 'error' && !/websocket|realtime|404|functions/i.test(m.text())) errors.push(`${who}: ${m.text()}`); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/websocket|realtime|404|functions|ERR_TUNNEL/i.test(m.text())) errors.push(`${who}: ${m.text()}`); });
 }
 
 sql(`update companies set strict_route_mode = false, feature_delivery_code = true where id = 'aaaaaaaa-0000-0000-0000-000000000000'`);
@@ -136,11 +142,12 @@ log('alerta de desvio na tela:', offVisible, '| aviso para o admin:', sql(`selec
 log('posições gravadas:', sql(`select count(*) from location_pings`));
 
 // ───────── Admin: mapa ao vivo e ajustes ─────────
-await admin.getByText('Mapa ao vivo', { exact: true }).click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Mapa ao vivo', exact: true }).click();
 await admin.getByText('MOTOBOYS').waitFor();
 await admin.waitForTimeout(800);
 await admin.screenshot({ path: `${SHOTS}/09-mapa-ao-vivo.png` });
-await admin.getByText('Entregas: ajustes', { exact: true }).click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Ajustes de entrega', exact: true }).click();
+await expand(admin, 'Rotas');
 await admin.getByText('Modo rota exata').waitFor();
 await admin.locator('input[type=checkbox]').first().click();
 await admin.waitForTimeout(600);

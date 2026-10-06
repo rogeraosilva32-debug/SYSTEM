@@ -1,6 +1,7 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ProfileLoadFallback from "./ProfileLoadFallback";
+import BrandLoader from "./BrandLoader";
 import CompanySuspendedGate from "./CompanySuspendedGate";
 
 const HOME_BY_ROLE = { platform: "/plataforma", company_admin: "/painel", collaborator: "/entregas", supervisor: "/supervisao" };
@@ -19,7 +20,7 @@ export default function RoleRoute({ allow, children }) {
   const auth = useAuth();
   const { user, profile, loading, activated } = auth;
 
-  if (loading) return null;
+  if (loading) return <BrandLoader instant />;
   if (!user) return <Navigate to="/login" replace />;
   if (!profile) return <ProfileLoadFallback />;
   if (!activated) return <Navigate to="/ativar" replace />;

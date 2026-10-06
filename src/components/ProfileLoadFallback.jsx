@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Box, Button, CircularProgress, Typography } from "@mui/material";
 import { useAuth } from "../context/AuthContext";
+import BrandLoader from "./BrandLoader";
 
 // Usado por ProtectedRoute e AdminRoute enquanto `user` já existe mas
 // `profile` ainda não carregou. Nos primeiros segundos mostra só um spinner
@@ -27,9 +28,7 @@ export default function ProfileLoadFallback() {
 
   if (!showRetry) {
     return (
-      <Box sx={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <CircularProgress size={28} sx={{ color: "#0f3460" }} />
-      </Box>
+      <BrandLoader instant />
     );
   }
 
