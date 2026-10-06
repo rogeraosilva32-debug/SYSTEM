@@ -974,48 +974,79 @@ export function OrdersTab() {
       )}
 
       {/* Fila */}
-      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: `repeat(${COLUMNS.length}, minmax(0, 1fr))` }, gap: 1.5, mb: 3 }}>
-        {COLUMNS.map((col) => {
-          // Prontos formam uma fila: o que ficou pronto primeiro sai primeiro.
-          const readyAt = (o) => new Date(o.ready_at || o.created_at).getTime();
-          const list = orders.filter((o) => o.status === col);
-          if (col === "ready") list.sort((a, b) => readyAt(a) - readyAt(b));
-          if (col === "problem" && list.length === 0) return <Box key={col} sx={{ display: { xs: "none", md: "block" } }} />;
-          return (
-            <Box key={col} sx={{ background: "#F5F5F4", borderRadius: "14px", p: 1.2, minHeight: { md: 200 } }}>
-              <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1, px: 0.5 }}>
-                <Typography sx={{ fontSize: 12, fontWeight: 800, color: ORDER_STATUS[col].fg, letterSpacing: "0.04em" }}>{ORDER_STATUS[col].label.toUpperCase()}</Typography>
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#A8A29E" }}>{list.length}</Typography>
-              </Box>
-              {list.map((o, i) => (
-                <Box key={o.id} onClick={() => setDetail(o)} data-testid={col === "ready" ? "ready-order" : undefined}
-                  sx={{ background: "#fff", border: "1px solid #E7E5E4", borderRadius: "12px", p: 1.2, mb: 1, cursor: "pointer", "&:hover": { borderColor: "#D6D3D1" } }}>
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                    {!auto && ["received", "preparing", "ready"].includes(o.status) && !o.run_id && !isLocal(o) && (
-                      <Checkbox size="small" sx={{ p: 0.3 }} checked={selected.has(o.id)}
-                        onClick={(e) => e.stopPropagation()} onChange={() => toggle(o.id)} />
-                    )}
-                    {col === "ready" && <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#fff", background: ORDER_STATUS.ready.fg, borderRadius: "6px", px: 0.6 }}>{i + 1}º</Typography>}
-                    <Typography sx={{ fontWeight: 800, fontSize: 13.5 }}>#{o.number}</Typography>
-                    <Typography sx={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.customer_name}</Typography>
-                    <Typography sx={{ fontSize: 11, color: "#A8A29E" }} title={col === "ready" ? "Tempo na fila de prontos" : undefined}>
-                      {minutesAgo(col === "ready" && o.ready_at ? o.ready_at : o.created_at)}
-                    </Typography>
-                  </Box>
-                  <Typography sx={{ fontSize: 11.5, color: "#78716C", mt: 0.3 }}>
-                    {isLocal(o) ? "🏪 Pedido local" : o.address_neighborhood || "Sem bairro"} · {money(o.total)}
-                  </Typography>
-                  {o.run_id && (
-                    <Typography sx={{ fontSize: 11, color: "#4F5BA6", fontWeight: 700, mt: 0.3 }}>
-                      🛵 {o.courier?.name} · parada {o.stop_sequence}{o.status !== "on_route" && o.status !== "problem" ? " · aguardando o motoboy confirmar a saída" : ""}
-                    </Typography>
-                  )}
-                </Box>
-              ))}
+      {(() => {
+        // A coluna "Com problema" só aparece quando tem pedido: as outras ficam mais largas.
+        const visible = COLUMNS.filter((col) => col !== "problem" || orders.some((o) => o.status === "problem"));
+        const card = (o, col, pos) => (
+          <Box key={o.id} onClick={() => setDetail(o)} data-testid={col === "ready" ? "ready-order" : undefined}
+            sx={{ background: "#fff", border: "1px solid #E7E5E4", borderRadius: "12px", p: 1.2, mb: 1, cursor: "pointer", "&:hover": { borderColor: "#D6D3D1" } }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.6 }}>
+              {!auto && ["received", "preparing", "ready"].includes(o.status) && !o.run_id && !isLocal(o) && (
+                <Checkbox size="small" sx={{ p: 0.3 }} checked={selected.has(o.id)}
+                  onClick={(e) => e.stopPropagation()} onChange={() => toggle(o.id)} />
+              )}
+              {pos && <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#fff", background: ORDER_STATUS.ready.fg, borderRadius: "6px", px: 0.6, flexShrink: 0 }}>{pos}º</Typography>}
+              <Typography sx={{ fontWeight: 800, fontSize: 13.5, flexShrink: 0 }}>#{o.number}</Typography>
+              <Typography sx={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.customer_name}</Typography>
+              <Typography sx={{ fontSize: 11, color: "#A8A29E", flexShrink: 0 }} title={col === "ready" ? "Tempo na fila de prontos" : undefined}>
+                {minutesAgo(col === "ready" && o.ready_at ? o.ready_at : o.created_at)}
+              </Typography>
             </Box>
-          );
-        })}
-      </Box>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, mt: 0.4 }}>
+              <Typography sx={{ fontSize: 11.5, color: "#78716C", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {isLocal(o) ? "🏪 Pedido local" : o.address_neighborhood || "Sem bairro"} · {money(o.total)}
+              </Typography>
+              {o.run_id && col !== "ready" && (
+                <Typography sx={{ fontSize: 11, color: "#4F5BA6", fontWeight: 700, flexShrink: 0, maxWidth: "50%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  🛵 {o.courier?.name}
+                </Typography>
+              )}
+              {o.run_id && col === "ready" && (
+                <Typography sx={{ fontSize: 10.5, color: "#4F5BA6", fontWeight: 800, flexShrink: 0 }}>parada {o.stop_sequence}</Typography>
+              )}
+            </Box>
+          </Box>
+        );
+        return (
+          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: `repeat(${visible.length}, minmax(0, 1fr))` }, gap: 1.5, mb: 3 }}>
+            {visible.map((col) => {
+              // Prontos formam uma fila: o que ficou pronto primeiro sai primeiro.
+              const readyAt = (o) => new Date(o.ready_at || o.created_at).getTime();
+              const list = orders.filter((o) => o.status === col);
+              if (col === "ready") list.sort((a, b) => readyAt(a) - readyAt(b));
+              // Na fila de prontos, os pedidos de uma mesma saída ficam juntos, sob o nome do motoboy.
+              const blocks = [];
+              if (col === "ready") {
+                const pos = new Map(list.map((o, i) => [o.id, i + 1]));
+                const seen = new Set();
+                for (const o of list) {
+                  if (!o.run_id) { blocks.push({ order: o, pos: pos.get(o.id) }); continue; }
+                  if (seen.has(o.run_id)) continue;
+                  seen.add(o.run_id);
+                  const group = list.filter((x) => x.run_id === o.run_id).sort((a, b) => (a.stop_sequence || 0) - (b.stop_sequence || 0));
+                  blocks.push({ run: o.run_id, courier: o.courier?.name, group, pos });
+                }
+              }
+              return (
+                <Box key={col} sx={{ background: "#F5F5F4", borderRadius: "14px", p: 1.2, minHeight: { md: 200 }, minWidth: 0 }}>
+                  <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1, px: 0.5 }}>
+                    <Typography sx={{ fontSize: 12, fontWeight: 800, color: ORDER_STATUS[col].fg, letterSpacing: "0.04em" }}>{ORDER_STATUS[col].label.toUpperCase()}</Typography>
+                    <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#A8A29E" }}>{list.length}</Typography>
+                  </Box>
+                  {col !== "ready" && list.map((o) => card(o, col))}
+                  {col === "ready" && blocks.map((b) => b.order ? card(b.order, col, b.pos) : (
+                    <Box key={b.run} sx={{ border: "1px dashed #C9CDEB", background: "#EEF0FA", borderRadius: "12px", p: 0.8, pb: 0.1, mb: 1 }}>
+                      <Typography sx={{ fontSize: 11.5, fontWeight: 800, color: "#4F5BA6", px: 0.4, mb: 0.2 }}>🛵 {b.courier || "Motoboy"}</Typography>
+                      <Typography sx={{ fontSize: 10.5, color: "#6B72A8", px: 0.4, mb: 0.6 }}>Aguardando o motoboy confirmar a saída</Typography>
+                      {b.group.map((o) => card(o, col, b.pos.get(o.id)))}
+                    </Box>
+                  ))}
+                </Box>
+              );
+            })}
+          </Box>
+        );
+      })()}
 
       {/* Saídas */}
       <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: "#78716C", mb: 1.5 }}>SAÍDAS EM ANDAMENTO</Typography>
