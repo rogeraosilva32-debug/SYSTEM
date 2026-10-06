@@ -11,7 +11,6 @@ import NearMeIcon from "@mui/icons-material/NearMe";
 import PhoneIcon from "@mui/icons-material/Phone";
 import ReportProblemOutlinedIcon from "@mui/icons-material/ReportProblemOutlined";
 import AppShell from "../components/AppShell";
-import CollaboratorNav from "../components/CollaboratorNav";
 import supabase from "../services/supabase";
 import { logEvent } from "../services/eventLog";
 import { useAuth } from "../context/AuthContext";
@@ -361,11 +360,10 @@ export default function CourierDeliveries() {
   if (legOrigin) mapPoints.push([legOrigin.lat, legOrigin.lng]);
   if (currentStop?.lat) mapPoints.push([currentStop.lat, currentStop.lng]);
 
-  if (runs === null) return <AppShell title="Minhas entregas"><CollaboratorNav /><Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box></AppShell>;
+  if (runs === null) return <AppShell title="Minhas entregas"><Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box></AppShell>;
 
   return (
     <AppShell title="Minhas entregas">
-      <CollaboratorNav />
       <ShiftBar shift={shift} unavailable={shiftUnavailable} onChange={load} onError={(text) => setMsg({ type: "error", text })} />
       {msg && <Alert severity={msg.type} sx={{ mb: 2 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       {geoError && <Alert severity="warning" sx={{ mb: 2 }}>{geoError}</Alert>}

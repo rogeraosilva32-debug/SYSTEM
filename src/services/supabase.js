@@ -18,6 +18,29 @@ if (!supabaseUrl || !supabaseKey) {
 const urlText = typeof window !== "undefined" ? `${window.location.hash}&${window.location.search}` : "";
 export const passwordRecovery = { fromUrl: /[#&?]type=(recovery|invite)(&|$)/.test(urlText), event: false };
 
+// Modo suporte ("ver como empresa"): a plataforma abre o painel de uma
+// empresa só para olhar. Cada consulta ao banco leva o cabeçalho
+// x-suporte-empresa; o banco confere que é mesmo a plataforma, passa a
+// responder como aquela empresa e deixa tudo SÓ LEITURA.
+const SUPPORT_KEY = "suporte-empresa";
+export function getSupport() {
+  try { return JSON.parse(sessionStorage.getItem(SUPPORT_KEY) || "null"); } catch { return null; }
+}
+export function setSupport(value) {
+  try {
+    if (value) sessionStorage.setItem(SUPPORT_KEY, JSON.stringify(value));
+    else sessionStorage.removeItem(SUPPORT_KEY);
+  } catch { /* sem sessionStorage: modo suporte não fica ligado */ }
+}
+const READ_ONLY_MSG = "Modo suporte: só leitura. Nada foi alterado.";
+const withSupportHeader = (input, init, url) => {
+  const support = getSupport();
+  if (!support?.id || !url.includes("/rest/v1/") || /log_client_event|support_view_log/.test(url)) return init;
+  const headers = new Headers(init?.headers || (typeof input === "object" ? input.headers : undefined));
+  headers.set("x-suporte-empresa", support.id);
+  return { ...init, headers };
+};
+
 // Avisa o log do sistema quando o servidor não responde (com internet) ou
 // devolve erro 5xx. O monitor é ligado em services/eventLog.js.
 export const fetchMonitor = { onProblem: null };
@@ -25,7 +48,16 @@ const monitoredFetch = async (input, init) => {
   const url = typeof input === "string" ? input : input?.url || "";
   const skip = url.includes("log_client_event");
   try {
-    const res = await fetch(input, init);
+    const support = Boolean(getSupport()?.id);
+    const res = await fetch(input, withSupportHeader(input, init, url));
+    // Tentou gravar no modo suporte: troca o erro técnico por um aviso claro.
+    if (support && res.status >= 400) {
+      const text = await res.clone().text().catch(() => "");
+      if (/read-only transaction/i.test(text)) {
+        return new Response(JSON.stringify({ code: "25006", message: READ_ONLY_MSG, details: null, hint: null }),
+          { status: 403, headers: { "Content-Type": "application/json" } });
+      }
+    }
     if (!skip && res.status >= 500) fetchMonitor.onProblem?.({ kind: "http", status: res.status, url });
     return res;
   } catch (err) {

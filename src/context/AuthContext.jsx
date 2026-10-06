@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import supabase from "../services/supabase";
+import supabase, { getSupport, setSupport } from "../services/supabase";
 import { clearCompanySettings } from "../hooks/useCompanySettings";
 import { logEvent } from "../services/eventLog";
 
@@ -21,6 +21,8 @@ export function AuthProvider({ children }) {
   const lastUserId = useRef(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Modo suporte da plataforma: { id, name } da empresa aberta, ou null.
+  const [support, setSupportState] = useState(() => getSupport());
 
   const loadProfile = useCallback(async (authUser) => {
     if (!authUser) { setProfile(null); return true; }
@@ -125,7 +127,10 @@ export function AuthProvider({ children }) {
         const authUser = session?.user || null;
         setUser(authUser);
         // Saiu (ou outra pessoa entrou nesta aba): esquece os ajustes da empresa anterior.
-        if (!authUser || authUser.id !== lastUserId.current) clearCompanySettings();
+        if (!authUser || authUser.id !== lastUserId.current) {
+          clearCompanySettings();
+          if (lastUserId.current) { setSupport(null); setSupportState(null); }
+        }
         lastUserId.current = authUser?.id || null;
         // Consultas ao supabase DENTRO deste callback podem travar o login
         // (trava interna do supabase-js); por isso rodam logo depois.
@@ -153,25 +158,50 @@ export function AuthProvider({ children }) {
     // Registra antes de sair (depois não há mais quem identificar); no máximo 2 s.
     await Promise.race([logEvent("conta", "logout", "Saiu do sistema"), new Promise((r) => setTimeout(r, 2000))]);
     try { if (lastUserId.current) sessionStorage.removeItem(`session-logged:${lastUserId.current}`); } catch { /* ok */ }
+    setSupport(null);
+    setSupportState(null);
     await supabase.auth.signOut();
     clearCompanySettings();
     setUser(null);
     setProfile(null);
   }, []);
 
+  // Abre o painel de uma empresa como se fosse o gestor dela, só para olhar.
+  const startSupport = useCallback(async (company) => {
+    await supabase.rpc("support_view_log", { p_company: company.id, p_action: "start" });
+    setSupport({ id: company.id, name: company.name });
+    clearCompanySettings();
+    setSupportState({ id: company.id, name: company.name });
+  }, []);
+  const stopSupport = useCallback(async () => {
+    const current = getSupport();
+    setSupport(null);
+    clearCompanySettings();
+    setSupportState(null);
+    if (current?.id) await supabase.rpc("support_view_log", { p_company: current.id, p_action: "stop" });
+  }, []);
+
   // Papéis derivados do perfil — usados pelas rotas protegidas e pelas telas
   // pra decidir o que mostrar. `activated` indica se a pessoa já resgatou uma
   // chave de licença ou código de colaborador (tem company_id + company_role).
-  const isPlatformAdmin = Boolean(profile?.is_platform_admin);
-  const isCompanyAdmin = profile?.company_role === "company_admin";
-  const isCollaborator = profile?.company_role === "collaborator";
-  const isSupervisor = profile?.company_role === "supervisor";
-  const activated = Boolean(profile?.company_id && profile?.company_role) || isPlatformAdmin;
+  // No modo suporte a plataforma vira "gestor" da empresa escolhida (o banco
+  // faz o mesmo e deixa tudo só leitura).
+  const realPlatformAdmin = Boolean(profile?.is_platform_admin);
+  const supportActive = Boolean(realPlatformAdmin && support?.id);
+  const effectiveProfile = supportActive && profile
+    ? { ...profile, company_id: support.id, company_role: "company_admin", is_platform_admin: false }
+    : profile;
+  const isPlatformAdmin = Boolean(effectiveProfile?.is_platform_admin);
+  const isCompanyAdmin = effectiveProfile?.company_role === "company_admin";
+  const isCollaborator = effectiveProfile?.company_role === "collaborator";
+  const isSupervisor = effectiveProfile?.company_role === "supervisor";
+  const activated = Boolean(effectiveProfile?.company_id && effectiveProfile?.company_role) || isPlatformAdmin;
 
   const value = {
-    user, profile, loading,
+    user, profile: effectiveProfile, loading,
     isPlatformAdmin, isCompanyAdmin, isCollaborator, isSupervisor, activated,
-    companyId: profile?.company_id || null,
+    companyId: effectiveProfile?.company_id || null,
+    support: supportActive ? support : null, startSupport, stopSupport,
     refreshProfile, logout,
   };
 

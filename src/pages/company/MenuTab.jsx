@@ -8,6 +8,7 @@ import EditIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import CollapsibleSection from "../../components/CollapsibleSection";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { money, parsePrice } from "../../utils/delivery";
@@ -354,17 +355,18 @@ export function MenuTab() {
         ))}
       </Section>
 
-      <Section title="Adicionais (opcionais)" action={
-        <Button variant="outlined" startIcon={<AddIcon />} onClick={() => setDialog({ open: true, kind: "addon", editing: null })}>Novo adicional</Button>
-      }>
+      <CollapsibleSection id="cardapio-adicionais" title="Adicionais (opcionais)"
+        summary={addons.length ? `${addons.length} adicional${addons.length > 1 ? "is" : ""}: ${addons.slice(0, 4).map((a) => a.name).join(", ")}${addons.length > 4 ? "…" : ""}` : "Nenhum adicional (ex.: bacon, cheddar)"}
+        action={<Button variant="outlined" startIcon={<AddIcon />} onClick={() => setDialog({ open: true, kind: "addon", editing: null })}>Novo adicional</Button>}>
         <Typography sx={{ fontSize: 12.5, color: "#78716C", mb: 1 }}>Podem ser somados a qualquer produto no pedido. Ex.: Bacon, Catupiry ou cheddar.</Typography>
         {addons.length === 0 && <Typography sx={{ fontSize: 13, color: "#A8A29E" }}>Nenhum adicional.</Typography>}
         {addons.map((p, i) => row(p, addons, i))}
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Categorias">
+      <CollapsibleSection id="cardapio-categorias" title="Categorias" defaultOpen={categories.length === 0}
+        summary={categories.length ? categories.map((c) => c.name).join(", ") : "Nenhuma categoria: crie antes dos produtos"}>
         <Categories categories={categories} products={products} companyId={companyId} onChanged={load} setError={setError} />
-      </Section>
+      </CollapsibleSection>
 
       <ProductDialog
         open={dialog.open} kind={dialog.kind} editing={dialog.editing} categories={categories} companyId={companyId}

@@ -13,10 +13,10 @@ sudo -u postgres dropdb --if-exists "$DB" >/dev/null
 sudo -u postgres createdb "$DB"
 $PSQL -d "$DB" -f supabase/tests/00_stub_supabase.sql >/dev/null 2>&1
 $PSQL -d "$DB" -f supabase/tests/01_legado_producao.sql >/dev/null
+$PSQL -d "$DB" -c "do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticator') then create role authenticator login password 'auth' noinherit; end if; end \$\$; grant anon, authenticated to authenticator;" >/dev/null
 $PSQL -d "$DB" -f supabase-b2b-schema.sql >/dev/null 2>&1
 $PSQL -d "$DB" -f supabase/tests/10_seed.sql >/dev/null
 $PSQL -d "$DB" -f supabase/tests/e2e/seed-e2e.sql >/dev/null
-$PSQL -d "$DB" -c "do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticator') then create role authenticator login password 'auth' noinherit; end if; end \$\$; grant anon, authenticated to authenticator;" >/dev/null
 cat > /tmp/postgrest.conf <<CONF
 db-uri = "postgres://authenticator:auth@127.0.0.1:5432/$DB"
 db-schemas = "public"

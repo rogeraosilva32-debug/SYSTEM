@@ -4649,6 +4649,529 @@ grant execute on function public.log_client_event(text, text, text, text, jsonb,
 grant execute on function public.platform_system_log(uuid, text[], text[], text, timestamptz, bigint, bigint, integer) to authenticated;
 
 -- ---------------------------------------------------------------------
+-- Visão geral da plataforma (06/10/2026): números do dia de todas as
+-- empresas numa chamada só, para a primeira tela do administrador.
+-- ---------------------------------------------------------------------
+create or replace function public.platform_overview()
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  v_today timestamptz := date_trunc('day', now() at time zone 'America/Sao_Paulo') at time zone 'America/Sao_Paulo';
+  v jsonb;
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+
+  with per_company as (
+    select c.id, c.name, c.status, c.seats_limit, c.created_at,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.created_at >= v_today) as orders_today,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.created_at >= v_today and o.status = 'delivered') as delivered_today,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.created_at >= v_today and o.status = 'cancelled') as cancelled_today,
+      (select coalesce(sum(o.total), 0) from public.delivery_orders o where o.company_id = c.id and o.created_at >= v_today and o.status = 'delivered') as revenue_today,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.status in ('received', 'preparing', 'ready', 'on_route', 'problem')) as open_now,
+      (select count(*) from public.delivery_orders o where o.company_id = c.id and o.status = 'problem') as problems_now,
+      (select count(*) from public.courier_shifts s where s.company_id = c.id and s.ended_at is null) as couriers_on_shift,
+      (select count(*) from public.profiles p where p.company_id = c.id and p.company_role in ('collaborator', 'supervisor')) as seats_used,
+      (select max(o.created_at) from public.delivery_orders o where o.company_id = c.id) as last_order_at,
+      (select count(*) from public.license_invoices i where i.company_id = c.id and i.status = 'pending' and i.due_date < current_date) as overdue_invoices,
+      (select coalesce(sum(i.amount), 0) from public.license_invoices i where i.company_id = c.id and i.status = 'pending' and i.due_date < current_date) as overdue_amount
+    from public.companies c
+  )
+  select jsonb_build_object(
+    'companies', jsonb_build_object(
+      'total', (select count(*) from per_company),
+      'active', (select count(*) from per_company where status = 'active'),
+      'suspended', (select count(*) from per_company where status = 'suspended')),
+    'today', jsonb_build_object(
+      'orders', (select coalesce(sum(orders_today), 0) from per_company),
+      'delivered', (select coalesce(sum(delivered_today), 0) from per_company),
+      'cancelled', (select coalesce(sum(cancelled_today), 0) from per_company),
+      'revenue', (select coalesce(sum(revenue_today), 0) from per_company),
+      'open_now', (select coalesce(sum(open_now), 0) from per_company),
+      'problems_now', (select coalesce(sum(problems_now), 0) from per_company),
+      'couriers_on_shift', (select coalesce(sum(couriers_on_shift), 0) from per_company)),
+    'billing', jsonb_build_object(
+      'overdue_companies', (select count(*) from per_company where overdue_invoices > 0),
+      'overdue_amount', (select coalesce(sum(overdue_amount), 0) from per_company)),
+    'log_24h', jsonb_build_object(
+      'errors', (select count(*) from public.system_log where created_at > now() - interval '24 hours' and level in ('error', 'critical')),
+      'warnings', (select count(*) from public.system_log where created_at > now() - interval '24 hours' and level = 'warning'),
+      'failed_logins', (select count(*) from public.system_log where created_at > now() - interval '24 hours' and action = 'login_failed'),
+      'offline_events', (select count(*) from public.system_log where created_at > now() - interval '24 hours' and action in ('connection_restored', 'server_unreachable', 'gps_lost'))),
+    'per_company', coalesce((select jsonb_agg(to_jsonb(pc) order by pc.status, pc.orders_today desc, pc.name) from per_company pc), '[]'::jsonb),
+    'generated_at', now())
+  into v;
+  return v;
+end;
+$$;
+grant execute on function public.platform_overview() to authenticated;
+
+-- ---------------------------------------------------------------------
+-- PLATAFORMA — modo suporte, avisos, alertas e planos (06/10/2026).
+-- ---------------------------------------------------------------------
+
+-- ===== Modo suporte ("ver como empresa", só leitura) =====
+-- O app da plataforma manda o cabeçalho x-suporte-empresa. Antes de cada
+-- requisição, o PostgREST roda api_pre_request(): se quem pede é admin da
+-- plataforma, a transação vira SÓ LEITURA e my_company_id() passa a ser a
+-- empresa escolhida — todas as regras de acesso já existentes valem como se
+-- fosse o gestor dela. Para qualquer outra pessoa o cabeçalho é ignorado.
+-- Sem a função instalada no PostgREST, o cabeçalho também é ignorado (não
+-- mostra nada, nunca libera mais do que antes).
+-- Esta função NÃO é security definer de propósito: função com SET próprio
+-- desfaz o set_config(..., true) ao terminar.
+-- Admin da plataforma de verdade (ignora o modo suporte).
+create or replace function public.is_real_platform_admin()
+returns boolean language sql stable security definer as $$
+  select coalesce((select is_platform_admin from public.profiles where id = auth.uid()), false);
+$$;
+
+-- Em modo suporte o admin da plataforma vale como gestor da empresa
+-- escolhida, e não como plataforma — assim não enxerga outras empresas.
+create or replace function public.is_platform_admin()
+returns boolean language sql stable security definer as $$
+  select public.is_real_platform_admin() and nullif(current_setting('app.suporte_empresa', true), '') is null;
+$$;
+
+create or replace function public.api_pre_request()
+returns void language plpgsql as $$
+declare
+  v_raw text;
+  v_id uuid;
+begin
+  v_raw := nullif(current_setting('request.headers', true), '')::jsonb ->> 'x-suporte-empresa';
+  if v_raw is null or v_raw = '' then return; end if;
+  if not public.is_real_platform_admin() then return; end if;
+  begin
+    v_id := v_raw::uuid;
+  exception when others then
+    return;
+  end;
+  if not exists (select 1 from public.companies where id = v_id) then return; end if;
+  perform set_config('transaction_read_only', 'on', true);
+  perform set_config('app.suporte_empresa', v_id::text, true);
+end;
+$$;
+
+-- Igual à versão da revisão de segurança (empresa suspensa não vê nada),
+-- mais o modo suporte (que mostra a empresa mesmo suspensa).
+create or replace function public.my_company_id()
+returns uuid language sql stable security definer as $$
+  select coalesce(
+    (select nullif(current_setting('app.suporte_empresa', true), '')::uuid where public.is_real_platform_admin()),
+    (select p.company_id from public.profiles p join public.companies c on c.id = p.company_id
+      where p.id = auth.uid() and c.status = 'active'));
+$$;
+
+create or replace function public.my_company_role()
+returns text language sql stable security definer as $$
+  select case
+    when nullif(current_setting('app.suporte_empresa', true), '') is not null and public.is_real_platform_admin() then 'company_admin'
+    else (select company_role from public.profiles where id = auth.uid()) end;
+$$;
+
+-- Gestor/supervisor de pedidos (também no modo suporte).
+create or replace function public.is_order_manager()
+returns boolean language sql stable security definer as $$
+  select coalesce(public.my_company_role() in ('company_admin', 'supervisor'), false)
+$$;
+
+-- Diz ao app se o modo suporte está mesmo ativo nesta requisição.
+create or replace function public.support_status()
+returns uuid language sql stable security definer as $$
+  select nullif(current_setting('app.suporte_empresa', true), '')::uuid where public.is_real_platform_admin();
+$$;
+grant execute on function public.support_status() to authenticated;
+
+-- Registra no log quando a plataforma entra/sai do modo suporte.
+create or replace function public.support_view_log(p_company uuid, p_action text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  if p_action not in ('start', 'stop') then raise exception 'Ação inválida.'; end if;
+  perform public.log_event(p_company, 'plataforma', 'warning', 'support_' || p_action,
+    case when p_action = 'start' then 'Plataforma abriu o painel da empresa em modo suporte (só leitura)'
+         else 'Plataforma saiu do modo suporte' end, 'companies', p_company::text, null, null, 'app');
+end;
+$$;
+grant execute on function public.support_view_log(uuid, text) to authenticated;
+
+-- Liga o api_pre_request no PostgREST (papel authenticator), sem trocar
+-- um pre-request que já exista com outro nome.
+do $$
+declare v_cur text;
+begin
+  if not exists (select 1 from pg_roles where rolname = 'authenticator') then
+    raise notice 'papel authenticator não existe: modo suporte não ligado';
+    return;
+  end if;
+  select substring(c from '^pgrst\.db_pre_request=(.*)$') into v_cur
+    from pg_db_role_setting s, unnest(s.setconfig) c
+   where s.setrole = 'authenticator'::regrole and s.setdatabase = 0 and c like 'pgrst.db_pre_request=%';
+  if v_cur is not null and v_cur not in ('public.api_pre_request', 'api_pre_request') then
+    raise notice 'já existe outro pgrst.db_pre_request (%): modo suporte não ligado', v_cur;
+    return;
+  end if;
+  begin
+    execute 'alter role authenticator set pgrst.db_pre_request = ''public.api_pre_request''';
+  exception when others then
+    raise notice 'modo suporte não ligado: %', sqlerrm;
+  end;
+end $$;
+notify pgrst, 'reload config';
+
+-- ===== Avisos da plataforma para as empresas =====
+create table if not exists public.platform_notices (
+  id uuid primary key default gen_random_uuid(),
+  title text not null check (char_length(btrim(title)) between 1 and 120),
+  body text not null default '' check (char_length(body) <= 2000),
+  level text not null default 'info' check (level in ('info', 'warning', 'critical')),
+  audience text not null default 'admins' check (audience in ('admins', 'all')),
+  company_ids uuid[],                 -- null = todas as empresas
+  starts_at timestamptz not null default now(),
+  ends_at timestamptz,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  check (ends_at is null or ends_at > starts_at)
+);
+create table if not exists public.platform_notice_reads (
+  notice_id uuid not null references public.platform_notices(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  read_at timestamptz not null default now(),
+  primary key (notice_id, user_id)
+);
+alter table public.platform_notices enable row level security;
+alter table public.platform_notice_reads enable row level security;
+drop policy if exists platform_notices_platform on public.platform_notices;
+create policy platform_notices_platform on public.platform_notices
+  for all using (public.is_platform_admin()) with check (public.is_platform_admin());
+drop policy if exists platform_notice_reads_platform on public.platform_notice_reads;
+create policy platform_notice_reads_platform on public.platform_notice_reads
+  for select using (public.is_platform_admin());
+
+-- Avisos que valem agora para quem está logado e que ainda não fechou.
+create or replace function public.my_platform_notices()
+returns table (id uuid, title text, body text, level text, starts_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select n.id, n.title, n.body, n.level, n.starts_at
+    from public.platform_notices n
+   where public.my_company_id() is not null
+     and n.starts_at <= now() and (n.ends_at is null or n.ends_at > now())
+     and (n.company_ids is null or public.my_company_id() = any(n.company_ids))
+     and (n.audience = 'all' or public.my_company_role() in ('company_admin', 'supervisor'))
+     and not exists (select 1 from public.platform_notice_reads r where r.notice_id = n.id and r.user_id = auth.uid())
+   order by case n.level when 'critical' then 0 when 'warning' then 1 else 2 end, n.starts_at desc
+   limit 5;
+$$;
+grant execute on function public.my_platform_notices() to authenticated;
+
+create or replace function public.dismiss_platform_notice(p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Sem permissão.'; end if;
+  insert into public.platform_notice_reads (notice_id, user_id) values (p_id, auth.uid())
+  on conflict do nothing;
+end;
+$$;
+grant execute on function public.dismiss_platform_notice(uuid) to authenticated;
+
+create or replace function public.save_platform_notice(
+  p_id uuid, p_title text, p_body text, p_level text, p_audience text,
+  p_company_ids uuid[], p_starts_at timestamptz, p_ends_at timestamptz)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  if p_company_ids is not null and cardinality(p_company_ids) = 0 then p_company_ids := null; end if;
+  if p_id is null then
+    insert into public.platform_notices (title, body, level, audience, company_ids, starts_at, ends_at, created_by)
+    values (btrim(p_title), coalesce(p_body, ''), coalesce(p_level, 'info'), coalesce(p_audience, 'admins'),
+            p_company_ids, coalesce(p_starts_at, now()), p_ends_at, auth.uid())
+    returning id into v_id;
+  else
+    update public.platform_notices set title = btrim(p_title), body = coalesce(p_body, ''),
+      level = coalesce(p_level, 'info'), audience = coalesce(p_audience, 'admins'), company_ids = p_company_ids,
+      starts_at = coalesce(p_starts_at, starts_at), ends_at = p_ends_at
+    where id = p_id returning id into v_id;
+    if v_id is null then raise exception 'Aviso não encontrado.'; end if;
+  end if;
+  perform public.log_event(null, 'plataforma', 'info', case when p_id is null then 'notice_created' else 'notice_updated' end,
+    (case when p_id is null then 'Aviso publicado: ' else 'Aviso alterado: ' end) || btrim(p_title),
+    'platform_notices', v_id::text, null,
+    jsonb_build_object('para', case when p_company_ids is null then 'todas as empresas' else cardinality(p_company_ids) || ' empresa(s)' end,
+                       'público', case when coalesce(p_audience, 'admins') = 'all' then 'todos' else 'gestores e supervisores' end), 'app');
+  return v_id;
+end;
+$$;
+grant execute on function public.save_platform_notice(uuid, text, text, text, text, uuid[], timestamptz, timestamptz) to authenticated;
+
+create or replace function public.delete_platform_notice(p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_title text;
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  delete from public.platform_notices where id = p_id returning title into v_title;
+  if v_title is not null then
+    perform public.log_event(null, 'plataforma', 'info', 'notice_deleted', 'Aviso apagado: ' || v_title,
+      'platform_notices', p_id::text, null, null, 'app');
+  end if;
+end;
+$$;
+grant execute on function public.delete_platform_notice(uuid) to authenticated;
+
+-- ===== Planos e limites =====
+create table if not exists public.plans (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique check (char_length(btrim(name)) between 1 and 60),
+  monthly_price numeric(10,2) not null default 0 check (monthly_price >= 0),
+  seats_limit integer not null default 5 check (seats_limit between 0 and 1000),
+  max_orders_month integer check (max_orders_month is null or max_orders_month > 0),
+  feature_branding boolean not null default false,
+  feature_delivery_code boolean not null default false,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+alter table public.plans enable row level security;
+drop policy if exists plans_platform on public.plans;
+create policy plans_platform on public.plans
+  for all using (public.is_platform_admin()) with check (public.is_platform_admin());
+alter table public.companies add column if not exists plan_id uuid references public.plans(id) on delete set null;
+
+-- Aplica o plano na empresa: vagas, recursos e mensalidade passam a ser os do plano.
+create or replace function public.apply_plan(p_company uuid, p_plan uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare v public.plans;
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  if p_plan is null then
+    update public.companies set plan_id = null where id = p_company;
+    return;
+  end if;
+  select * into v from public.plans where id = p_plan;
+  if v.id is null then raise exception 'Plano não encontrado.'; end if;
+  update public.companies set plan_id = v.id, seats_limit = v.seats_limit, monthly_price = v.monthly_price,
+    feature_branding = v.feature_branding, feature_delivery_code = v.feature_delivery_code
+  where id = p_company;
+  if not found then raise exception 'Empresa não encontrada.'; end if;
+end;
+$$;
+grant execute on function public.apply_plan(uuid, uuid) to authenticated;
+
+-- Mudou o plano: todas as empresas nele acompanham.
+create or replace function public.plans_propagate()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.companies set seats_limit = new.seats_limit, monthly_price = new.monthly_price,
+    feature_branding = new.feature_branding, feature_delivery_code = new.feature_delivery_code
+  where plan_id = new.id;
+  return new;
+end;
+$$;
+drop trigger if exists trg_plans_propagate on public.plans;
+create trigger trg_plans_propagate after update of seats_limit, monthly_price, feature_branding, feature_delivery_code
+  on public.plans for each row execute function public.plans_propagate();
+revoke execute on function public.plans_propagate() from public, anon, authenticated;
+
+-- Log das mudanças nos planos.
+create or replace function public.plans_log()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  perform public.log_event(null, 'plataforma', 'info',
+    case tg_op when 'INSERT' then 'plan_created' when 'UPDATE' then 'plan_updated' else 'plan_deleted' end,
+    case tg_op when 'INSERT' then 'Plano criado: ' when 'UPDATE' then 'Plano alterado: ' else 'Plano apagado: ' end
+      || coalesce(new.name, old.name),
+    'plans', coalesce(new.id, old.id)::text, null,
+    case when tg_op = 'DELETE' then null else jsonb_build_object(
+      'mensalidade', public.log_money(new.monthly_price), 'vagas', new.seats_limit,
+      'pedidos por mês', coalesce(new.max_orders_month::text, 'sem limite'),
+      'empresas no plano', (select count(*) from public.companies where plan_id = new.id)) end);
+  return coalesce(new, old);
+end;
+$$;
+drop trigger if exists trg_plans_log on public.plans;
+create trigger trg_plans_log after insert or update or delete on public.plans
+  for each row execute function public.plans_log();
+revoke execute on function public.plans_log() from public, anon, authenticated;
+
+-- Pedidos deste mês (no fuso da empresa) e limite do plano.
+create or replace function public.company_month_orders(p_company uuid)
+returns integer language sql stable security definer set search_path = public as $$
+  select count(*)::integer from public.delivery_orders o, public.companies c
+   where c.id = p_company and o.company_id = c.id
+     and o.created_at >= (date_trunc('month', now() at time zone coalesce(c.timezone, 'America/Sao_Paulo'))
+                          at time zone coalesce(c.timezone, 'America/Sao_Paulo'));
+$$;
+revoke execute on function public.company_month_orders(uuid) from public, anon, authenticated;
+
+create or replace function public.enforce_plan_order_limit()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_max integer; v_name text;
+begin
+  select p.max_orders_month, p.name into v_max, v_name
+    from public.companies c join public.plans p on p.id = c.plan_id where c.id = new.company_id;
+  if v_max is not null and public.company_month_orders(new.company_id) >= v_max then
+    raise exception 'Limite do plano % atingido: % pedidos por mês. Fale com a plataforma para aumentar.', v_name, v_max
+      using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_plan_order_limit on public.delivery_orders;
+create trigger trg_plan_order_limit before insert on public.delivery_orders
+  for each row execute function public.enforce_plan_order_limit();
+revoke execute on function public.enforce_plan_order_limit() from public, anon, authenticated;
+
+-- Plano da própria empresa (para o gestor ver o uso).
+create or replace function public.my_plan_usage()
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('plan', p.name, 'max_orders_month', p.max_orders_month,
+    'orders_month', public.company_month_orders(c.id), 'seats_limit', c.seats_limit)
+    from public.companies c left join public.plans p on p.id = c.plan_id
+   where c.id = public.my_company_id() and public.my_company_role() in ('company_admin', 'supervisor');
+$$;
+grant execute on function public.my_plan_usage() to authenticated;
+
+-- ===== Alertas automáticos =====
+create table if not exists public.platform_alerts (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  kind text not null,
+  message text not null,
+  details jsonb,
+  opened_at timestamptz not null default now(),
+  resolved_at timestamptz,
+  seen_at timestamptz,
+  seen_by uuid references public.profiles(id) on delete set null
+);
+create unique index if not exists platform_alerts_open_uq on public.platform_alerts (company_id, kind) where resolved_at is null;
+create index if not exists platform_alerts_recent_idx on public.platform_alerts (opened_at desc);
+alter table public.platform_alerts enable row level security;
+drop policy if exists platform_alerts_platform on public.platform_alerts;
+create policy platform_alerts_platform on public.platform_alerts
+  for select using (public.is_platform_admin());
+
+-- Confere todas as empresas: abre o alerta quando a situação aparece e
+-- fecha sozinho quando ela some. Roda a cada 10 min (pg_cron) e quando a
+-- plataforma abre a Visão geral.
+create or replace function public.platform_check_alerts()
+returns integer language plpgsql security definer set search_path = public as $$
+declare
+  r record;
+  v_opened integer := 0;
+  v_id uuid;
+begin
+  if auth.uid() is not null and not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  -- Em modo suporte a transação é só leitura: não confere agora.
+  if current_setting('transaction_read_only') = 'on' then return 0; end if;
+
+  create temp table if not exists _alerts_now (company_id uuid, kind text, message text, details jsonb) on commit drop;
+  truncate _alerts_now;
+
+  insert into _alerts_now
+  -- muitos erros na última hora
+  select c.id, 'errors', count(*) || ' erros na última hora', jsonb_build_object('erros', count(*))
+    from public.companies c join public.system_log l on l.company_id = c.id
+   where l.created_at > now() - interval '1 hour' and l.level in ('error', 'critical')
+   group by c.id having count(*) >= 10
+  union all
+  -- pedidos marcados com problema agora
+  select c.id, 'problem_orders', count(*) || ' pedido(s) com problema agora', jsonb_build_object('pedidos', count(*))
+    from public.companies c join public.delivery_orders o on o.company_id = c.id
+   where o.status = 'problem'
+   group by c.id
+  union all
+  -- pedidos parados há mais de 3 horas
+  select c.id, 'stuck_orders', count(*) || ' pedido(s) aberto(s) há mais de 3 horas', jsonb_build_object('pedidos', count(*))
+    from public.companies c join public.delivery_orders o on o.company_id = c.id
+   where c.status = 'active' and o.status in ('received', 'preparing', 'ready', 'on_route', 'problem')
+     and o.created_at < now() - interval '3 hours'
+   group by c.id
+  union all
+  -- empresa que vendia e parou (3 dias sem pedido)
+  select c.id, 'no_orders', 'Sem pedidos há ' || extract(day from now() - max(o.created_at))::int || ' dias',
+         jsonb_build_object('último pedido', max(o.created_at))
+    from public.companies c join public.delivery_orders o on o.company_id = c.id
+   where c.status = 'active'
+   group by c.id having max(o.created_at) < now() - interval '3 days'
+  union all
+  -- fatura vencida
+  select c.id, 'invoice_overdue', count(*) || ' fatura(s) vencida(s): ' || public.log_money(sum(i.amount)),
+         jsonb_build_object('valor', sum(i.amount))
+    from public.companies c join public.license_invoices i on i.company_id = c.id
+   where i.status = 'pending' and i.due_date < current_date
+   group by c.id
+  union all
+  -- todas as vagas usadas
+  select c.id, 'seats_full', 'Todas as ' || c.seats_limit || ' vagas de colaborador estão em uso', null
+    from public.companies c
+   where c.status = 'active' and c.seats_limit > 0
+     and (select count(*) from public.profiles p where p.company_id = c.id and p.company_role in ('collaborator', 'supervisor')) >= c.seats_limit
+  union all
+  -- perto do limite de pedidos do plano (90%)
+  select c.id, 'plan_orders', public.company_month_orders(c.id) || ' de ' || p.max_orders_month || ' pedidos do plano este mês',
+         jsonb_build_object('plano', p.name)
+    from public.companies c join public.plans p on p.id = c.plan_id
+   where p.max_orders_month is not null and public.company_month_orders(c.id) >= ceil(p.max_orders_month * 0.9);
+
+  -- fecha os que não valem mais
+  update public.platform_alerts a set resolved_at = now()
+   where a.resolved_at is null
+     and not exists (select 1 from _alerts_now n where n.company_id = a.company_id and n.kind = a.kind);
+
+  -- atualiza a mensagem dos que continuam
+  update public.platform_alerts a set message = n.message, details = n.details
+    from _alerts_now n
+   where a.resolved_at is null and n.company_id = a.company_id and n.kind = a.kind and a.message is distinct from n.message;
+
+  -- abre os novos
+  for r in select n.* from _alerts_now n
+            where not exists (select 1 from public.platform_alerts a where a.resolved_at is null and a.company_id = n.company_id and a.kind = n.kind)
+  loop
+    insert into public.platform_alerts (company_id, kind, message, details) values (r.company_id, r.kind, r.message, r.details)
+    on conflict do nothing returning id into v_id;
+    if v_id is not null then
+      v_opened := v_opened + 1;
+      perform public.log_event(r.company_id, 'plataforma', 'warning', 'alert_' || r.kind, 'Alerta: ' || r.message,
+        'platform_alerts', v_id::text, null, r.details);
+    end if;
+  end loop;
+  return v_opened;
+end;
+$$;
+grant execute on function public.platform_check_alerts() to authenticated;
+
+create or replace function public.platform_alerts_list(p_include_resolved boolean default false)
+returns table (id uuid, company_id uuid, company_name text, kind text, message text, opened_at timestamptz,
+               resolved_at timestamptz, seen_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select a.id, a.company_id, c.name, a.kind, a.message, a.opened_at, a.resolved_at, a.seen_at
+    from public.platform_alerts a join public.companies c on c.id = a.company_id
+   where public.is_platform_admin()
+     and (a.resolved_at is null or (p_include_resolved and a.resolved_at > now() - interval '7 days'))
+   order by a.resolved_at is not null, a.seen_at is not null, a.opened_at desc
+   limit 200;
+$$;
+grant execute on function public.platform_alerts_list(boolean) to authenticated;
+
+create or replace function public.platform_alert_seen(p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  update public.platform_alerts set seen_at = now(), seen_by = auth.uid() where id = p_id and seen_at is null;
+end;
+$$;
+grant execute on function public.platform_alert_seen(uuid) to authenticated;
+
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    begin
+      execute $c$select cron.schedule('platform-alerts', '*/10 * * * *', 'select public.platform_check_alerts()')$c$;
+    exception when others then
+      raise notice 'alertas da plataforma não agendados: %', sqlerrm;
+    end;
+  end if;
+end $$;
+
+-- ---------------------------------------------------------------------
 -- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).
 -- O Supabase dá EXECUTE de toda função para anon. Aqui quem já podia
 -- (logado) continua podendo, e o visitante sem login só chama as funções
@@ -4681,7 +5204,7 @@ begin
   foreach f in array array[
     'get_rating_context(uuid)', 'submit_rating(uuid, integer, text)', 'get_rating_branding(uuid)',
     'kitchen_board(text)', 'kitchen_advance(uuid, text)',
-    'is_platform_admin()', 'my_company_id()', 'my_company_role()', 'is_order_manager()',
+    'is_platform_admin()', 'is_real_platform_admin()', 'api_pre_request()', 'my_company_id()', 'my_company_role()', 'is_order_manager()',
     'my_supervised_ids()', 'is_client_call()', 'profile_company(uuid)', 'service_company(uuid)',
     'log_client_event(text, text, text, text, jsonb, text)']
   loop

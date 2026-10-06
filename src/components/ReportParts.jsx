@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Box, Typography, Button, TextField, Chip } from "@mui/material";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import { PERIODS, periodRange } from "../utils/reports";
+import CollapsibleSection from "./CollapsibleSection";
 
 // Peças visuais compartilhadas pelos relatórios e pelo financeiro.
 
@@ -52,7 +53,21 @@ export function StatGrid({ children }) {
   );
 }
 
-export function Section({ title, onExport, children, actions }) {
+// Com `collapsible`, vira um bloco que abre e fecha (veja CollapsibleSection).
+export function Section({ title, onExport, children, actions, collapsible, id, summary, defaultOpen }) {
+  if (collapsible) {
+    return (
+      <CollapsibleSection id={id} title={title} summary={summary} defaultOpen={defaultOpen}
+        action={(actions || onExport) && (
+          <Box sx={{ display: "flex", gap: 1 }}>
+            {actions}
+            {onExport && <Button size="small" startIcon={<FileDownloadOutlinedIcon />} onClick={onExport} sx={{ color: "#57534E" }}>CSV</Button>}
+          </Box>
+        )}>
+        {children}
+      </CollapsibleSection>
+    );
+  }
   return (
     <Box sx={{ p: 2.5, border: "1px solid #E7E5E4", borderRadius: "16px", background: "#fff", mb: 2.5, breakInside: "avoid" }}>
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, mb: 1.5, flexWrap: "wrap" }}>

@@ -1,6 +1,18 @@
 import ErrorBoundary from "../components/ErrorBoundary";
-import { useState } from "react";
-import { Box } from "@mui/material";
+import ReceiptLongOutlinedIcon from "@mui/icons-material/ReceiptLongOutlined";
+import RestaurantMenuIcon from "@mui/icons-material/RestaurantMenu";
+import MapOutlinedIcon from "@mui/icons-material/MapOutlined";
+import BarChartIcon from "@mui/icons-material/BarChart";
+import AccountBalanceWalletOutlinedIcon from "@mui/icons-material/AccountBalanceWalletOutlined";
+import GroupOutlinedIcon from "@mui/icons-material/GroupOutlined";
+import HandymanOutlinedIcon from "@mui/icons-material/HandymanOutlined";
+import EventNoteOutlinedIcon from "@mui/icons-material/EventNoteOutlined";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlineOutlined";
+import TuneIcon from "@mui/icons-material/Tune";
+import ExtensionOutlinedIcon from "@mui/icons-material/ExtensionOutlined";
+import PaletteOutlinedIcon from "@mui/icons-material/PaletteOutlined";
+import HistoryIcon from "@mui/icons-material/History";
+import useTab from "../hooks/useTab";
 import AppShell from "../components/AppShell";
 import { CollaboratorsTab, ServicesTab } from "./company/CollaboratorsAndServices";
 import { AssignmentsTab } from "./company/AssignmentsTab";
@@ -17,46 +29,32 @@ import { useCompanySettings } from "../hooks/useCompanySettings";
 import AuditLogViewer from "../components/AuditLogViewer";
 import { useAuth } from "../context/AuthContext";
 
+// Menu lateral, agrupado do uso diário ao que quase nunca muda.
 const TABS = [
-  { key: "orders", label: "Pedidos" },
-  { key: "menu", label: "Cardápio" },
-  { key: "live", label: "Mapa ao vivo" },
-  { key: "reports", label: "Relatórios" },
-  { key: "finance", label: "Financeiro" },
-  { key: "collaborators", label: "Colaboradores" },
-  { key: "services", label: "Serviços" },
-  { key: "assignments", label: "Designações" },
-  { key: "messages", label: "Mensagens" },
-  { key: "delivery", label: "Entregas: ajustes" },
-  { key: "integrations", label: "Integrações & API" },
-  { key: "audit", label: "Auditoria" },
+  { key: "orders", label: "Pedidos", icon: <ReceiptLongOutlinedIcon />, group: "Operação" },
+  { key: "live", label: "Mapa ao vivo", icon: <MapOutlinedIcon />, group: "Operação" },
+  { key: "messages", label: "Mensagens", icon: <ChatBubbleOutlineIcon />, group: "Operação", unread: true },
+  { key: "menu", label: "Cardápio", icon: <RestaurantMenuIcon />, group: "Loja" },
+  { key: "delivery", label: "Ajustes de entrega", icon: <TuneIcon />, group: "Loja" },
+  { key: "branding", label: "Marca", icon: <PaletteOutlinedIcon />, group: "Loja", feature: "feature_branding" },
+  { key: "collaborators", label: "Colaboradores", icon: <GroupOutlinedIcon />, group: "Equipe" },
+  { key: "assignments", label: "Designações", icon: <EventNoteOutlinedIcon />, group: "Equipe" },
+  { key: "services", label: "Serviços", icon: <HandymanOutlinedIcon />, group: "Equipe" },
+  { key: "reports", label: "Relatórios", icon: <BarChartIcon />, group: "Gestão" },
+  { key: "finance", label: "Financeiro", icon: <AccountBalanceWalletOutlinedIcon />, group: "Gestão" },
+  { key: "integrations", label: "Integrações & API", icon: <ExtensionOutlinedIcon />, group: "Avançado" },
+  { key: "audit", label: "Auditoria", icon: <HistoryIcon />, group: "Avançado" },
 ];
 
 export default function CompanyAdmin() {
   const { companyId } = useAuth();
-  const [tab, setTab] = useState("orders");
   const settings = useCompanySettings();
   // A aba de marca só aparece quando a plataforma liberou o recurso.
-  const tabs = settings?.feature_branding ? [...TABS.slice(0, -1), { key: "branding", label: "Marca" }, TABS[TABS.length - 1]] : TABS;
+  const tabs = TABS.filter((t) => !t.feature || settings?.[t.feature]);
+  const [tab, setTab] = useTab(tabs.map((t) => t.key), "orders");
 
   return (
-    <AppShell title="Painel da empresa">
-      <Box className="no-print" sx={{ display: "flex", gap: 0.5, mb: 3, borderBottom: "1px solid #E7E5E4", overflowX: "auto" }}>
-        {tabs.map((t) => (
-          <Box
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            sx={{
-              px: 2, py: 1.2, cursor: "pointer", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
-              color: tab === t.key ? "#1C1917" : "#A8A29E",
-              borderBottom: tab === t.key ? "2px solid #1C1917" : "2px solid transparent",
-            }}
-          >
-            {t.label}
-          </Box>
-        ))}
-      </Box>
-
+    <AppShell title={tabs.find((t) => t.key === tab)?.label || "Painel da empresa"} nav={{ items: tabs, current: tab, onSelect: setTab }}>
       <ErrorBoundary inline key={tab}>
         {tab === "orders" && <OrdersTab />}
         {tab === "menu" && <MenuTab />}

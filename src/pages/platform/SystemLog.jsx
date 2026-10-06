@@ -25,6 +25,7 @@ const TOPICS = [
   { key: "segurança", label: "Segurança" },
   { key: "integração", label: "Integração" },
   { key: "auditoria", label: "Auditoria" },
+  { key: "plataforma", label: "Plataforma" },
 ];
 
 const LEVELS = [

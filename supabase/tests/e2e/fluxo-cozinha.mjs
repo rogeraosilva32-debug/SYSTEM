@@ -9,6 +9,12 @@ mkdirSync(SHOTS, { recursive: true });
 const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q.replace(/"/g, '\\"')}"`).toString().trim();
 const APP = 'http://localhost:4173';
 const errors = [];
+const expand = async (p, title) => {
+  const h = p.locator('[role=button][aria-expanded]').filter({ hasText: new RegExp('^' + title) }).first();
+  await h.waitFor();
+  if ((await h.getAttribute('aria-expanded')) === 'false') await h.click();
+  await p.waitForTimeout(300);
+};
 let expectRejected = false; // depois de trocar o link, o banco recusa o antigo (HTTP 400)
 const check = (label, ok) => { console.log(ok ? '✓' : '✗', label); if (!ok) errors.push(`falhou: ${label}`); };
 const A = 'aaaaaaaa-0000-0000-0000-000000000000';
@@ -43,7 +49,8 @@ await admin.getByLabel('Senha').fill('senha123');
 await admin.getByRole('button', { name: /^entrar$/i }).click();
 await admin.waitForLoadState('networkidle');
 check('aba pedidos tem o botão do modo cozinha', await admin.getByRole('button', { name: 'Modo cozinha' }).isVisible());
-await admin.getByText('Entregas: ajustes', { exact: true }).click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Ajustes de entrega', exact: true }).click();
+await expand(admin, 'Tela da cozinha');
 await admin.getByRole('button', { name: 'Mostrar link da cozinha' }).click();
 const link = await admin.getByLabel('Link da cozinha').inputValue();
 check('link da cozinha gerado', /\/cozinha\/[0-9a-f]{64}$/.test(link));
@@ -100,7 +107,8 @@ check('gestor abre /cozinha logado', true);
 
 // ───────── Trocar o link derruba o antigo ─────────
 await admin.goto(APP + '/painel');
-await admin.getByText('Entregas: ajustes', { exact: true }).click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Ajustes de entrega', exact: true }).click();
+await expand(admin, 'Tela da cozinha');
 await admin.getByRole('button', { name: 'Mostrar link da cozinha' }).click();
 await admin.getByRole('button', { name: 'Trocar link' }).click();
 await admin.getByText('Link trocado').waitFor();

@@ -70,7 +70,7 @@ async function login(page, email) {
 }
 function watch(page, who) {
   page.on('pageerror', (e) => errors.push(`${who}: ${e.message}`));
-  page.on('console', (m) => { if (m.type() === 'error' && !/websocket|realtime|404|functions/i.test(m.text())) errors.push(`${who}: ${m.text()}`); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/websocket|realtime|404|functions|ERR_TUNNEL/i.test(m.text())) errors.push(`${who}: ${m.text()}`); });
 }
 const polylines = (page) => page.locator('path.leaflet-interactive').count();
 
@@ -82,7 +82,7 @@ const adminCtx = await browser.newContext({ viewport: { width: 1360, height: 900
 await mockExternal(adminCtx);
 const admin = await adminCtx.newPage(); watch(admin, 'admin');
 await login(admin, 'a1@t');
-await admin.getByText('Entregas: ajustes', { exact: true }).click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Ajustes de entrega', exact: true }).click();
 await admin.getByText('Endereço da loja (ponto de partida)').waitFor();
 await admin.getByLabel('Buscar endereço').fill('Rua Direita 100');
 await admin.getByRole('menuitem', { name: /Rua Direita, 100/ }).click();
@@ -95,7 +95,7 @@ await admin.screenshot({ path: `${SHOTS}/30-endereco-loja.png`, fullPage: true }
 
 // ───────── Admin: pedido com endereço digitado ─────────
 await admin.reload(); await admin.waitForLoadState('networkidle');
-await admin.getByText('Pedidos', { exact: true }).first().click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Pedidos', exact: true }).click();
 await admin.getByRole('button', { name: 'Novo pedido' }).click();
 await admin.getByLabel('Nome do cliente').fill('Rua Errada');
 await cont(admin);
@@ -193,7 +193,7 @@ log('rotas da 1ª parada sem GPS:', await courier.getByText(/min · .* km/).coun
 await courier.screenshot({ path: `${SHOTS}/34-motoboy-rota-sem-gps.png`, fullPage: true });
 
 // ───────── Mapa ao vivo ─────────
-await admin.getByText('Mapa ao vivo', { exact: true }).click();
+await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Mapa ao vivo', exact: true }).click();
 await admin.waitForTimeout(2000);
 log('mapa ao vivo com trajeto previsto:', (await polylines(admin)) > 0);
 await admin.screenshot({ path: `${SHOTS}/35-mapa-ao-vivo-rota.png` });

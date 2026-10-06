@@ -9,6 +9,14 @@ mkdirSync(SHOTS, { recursive: true });
 const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q.replace(/"/g, '\\"')}"`).toString().trim();
 const APP = 'http://localhost:4173';
 const log = (...a) => console.log('•', ...a);
+
+// Abre um bloco "mostrar/esconder" pelo título, se estiver fechado.
+const expand = async (p, title) => {
+  const h = p.locator('[role=button][aria-expanded]').filter({ hasText: new RegExp('^' + title) }).first();
+  await h.waitFor();
+  if ((await h.getAttribute('aria-expanded')) === 'false') await h.click();
+  await p.waitForTimeout(300);
+};
 const errors = [];
 const cont = (p) => p.getByRole('button', { name: 'Continuar' }).click();
 const check = (label, ok) => { console.log(ok ? '✓' : '✗', label); if (!ok) errors.push(`falhou: ${label}`); };
@@ -37,7 +45,8 @@ await page.getByRole('button', { name: /^entrar$/i }).click();
 await page.waitForLoadState('networkidle');
 
 // ───────── Cardápio ─────────
-await page.getByText('Cardápio', { exact: true }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Cardápio', exact: true }).click();
+await expand(page, 'Categorias');
 await page.getByLabel('Nova categoria').fill('Sanduíches tradicionais');
 await page.getByRole('button', { name: 'Adicionar', exact: true }).click();
 await page.getByText('SANDUÍCHES TRADICIONAIS', { exact: true }).waitFor();
@@ -56,6 +65,7 @@ await page.screenshot({ path: `${SHOTS}/40-produto-opcoes.png` });
 await page.getByRole('button', { name: 'Salvar' }).click();
 await page.getByText('Hambúrguer: R$ 26,00 · Frango ou lombo: R$ 29,50').waitFor();
 
+await expand(page, 'Adicionais');
 await page.getByRole('button', { name: 'Novo adicional' }).click();
 await page.getByLabel('Nome', { exact: true }).fill('Bacon');
 await page.getByLabel('Preço (R$)').fill('5');
@@ -72,7 +82,7 @@ await page.getByText('Frango ou lombo: R$ 30,00').waitFor();
 check('admin altera o preço da opção', sql(`select variants->1->>'price' from products where name='X-Tudo'`) === '30');
 
 // ───────── Pedido ─────────
-await page.getByText('Pedidos', { exact: true }).click();
+await page.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Pedidos', exact: true }).click();
 await page.getByRole('button', { name: 'Novo pedido' }).click();
 await page.getByLabel('Nome do cliente').fill('Rita Cardápio');
 await cont(page);

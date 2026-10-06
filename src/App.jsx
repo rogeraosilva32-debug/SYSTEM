@@ -1,5 +1,5 @@
 import ErrorBoundary from "./components/ErrorBoundary";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AnimatePresence } from "framer-motion";
@@ -8,6 +8,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import RoleRoute, { homeForCurrentUser } from "./components/RoleRoute";
 import { passwordRecovery } from "./services/supabase";
 import PageTransition from "./components/PageTransition";
+import BrandLoader from "./components/BrandLoader";
 
 import Welcome from "./pages/Welcome";
 import Login from "./pages/Login";
@@ -15,20 +16,43 @@ import ResetPassword from "./pages/ResetPassword";
 import Activate from "./pages/Activate";
 // Telas de cada papel carregam sob demanda: o motoboy não precisa baixar o
 // painel da plataforma (o app inteiro num arquivo só tinha 1,1 MB).
-const PlatformAdmin = lazy(() => import("./pages/PlatformAdmin"));
-const CompanyAdmin = lazy(() => import("./pages/CompanyAdmin"));
-const CollaboratorTasks = lazy(() => import("./pages/CollaboratorTasks"));
-const CourierDeliveries = lazy(() => import("./pages/CourierDeliveries"));
-const CourierEarnings = lazy(() => import("./pages/CourierEarnings"));
-const CollaboratorChat = lazy(() => import("./pages/CollaboratorChat"));
-const SupervisorDashboard = lazy(() => import("./pages/SupervisorDashboard"));
+const PAGES = {
+  platform: () => import("./pages/PlatformAdmin"),
+  company: () => import("./pages/CompanyAdmin"),
+  tasks: () => import("./pages/CollaboratorTasks"),
+  deliveries: () => import("./pages/CourierDeliveries"),
+  earnings: () => import("./pages/CourierEarnings"),
+  chat: () => import("./pages/CollaboratorChat"),
+  supervisor: () => import("./pages/SupervisorDashboard"),
+};
+const PlatformAdmin = lazy(PAGES.platform);
+const CompanyAdmin = lazy(PAGES.company);
+const CollaboratorTasks = lazy(PAGES.tasks);
+const CourierDeliveries = lazy(PAGES.deliveries);
+const CourierEarnings = lazy(PAGES.earnings);
+const CollaboratorChat = lazy(PAGES.chat);
+const SupervisorDashboard = lazy(PAGES.supervisor);
+
+// Depois do login, baixa em segundo plano as telas do papel da pessoa: trocar
+// de tela não espera download nem mostra tela vazia.
+function usePrefetchPages() {
+  const { profile, isPlatformAdmin, isCompanyAdmin, isSupervisor, isCollaborator } = useAuth();
+  useEffect(() => {
+    if (!profile) return undefined;
+    const keys = isPlatformAdmin ? ["platform"] : isCompanyAdmin ? ["company"] : isSupervisor ? ["supervisor"]
+      : isCollaborator ? ["deliveries", "tasks", "earnings", "chat"] : [];
+    const run = () => keys.forEach((k) => PAGES[k]().catch(() => {}));
+    const id = window.requestIdleCallback ? window.requestIdleCallback(run, { timeout: 3000 }) : setTimeout(run, 1500);
+    return () => (window.cancelIdleCallback && window.requestIdleCallback ? window.cancelIdleCallback(id) : clearTimeout(id));
+  }, [profile, isPlatformAdmin, isCompanyAdmin, isSupervisor, isCollaborator]);
+}
 const RatingPage = lazy(() => import("./pages/RatingPage"));
 const KitchenDisplay = lazy(() => import("./pages/KitchenDisplay"));
 
 function RootRoute() {
   const auth = useAuth();
   const { user, loading } = auth;
-  if (loading) return null;
+  if (loading) return <BrandLoader instant />;
   // Link de convite/recuperação que caiu na página inicial: primeiro cria a senha.
   if (user && (passwordRecovery.fromUrl || passwordRecovery.event)) return <Navigate to="/reset-password" replace />;
   if (!user) return <Navigate to="/welcome" replace />;
@@ -37,11 +61,14 @@ function RootRoute() {
 
 function AnimatedApp() {
   const location = useLocation();
+  usePrefetchPages();
 
+  // Sem esperar a tela anterior sumir: a nova entra por cima, rápido, como
+  // num app (antes a tela "sumia e voltava" a cada troca).
   return (
-    <AnimatePresence mode="wait">
+    <AnimatePresence initial={false}>
       <PageTransition routeKey={location.pathname}>
-        <Suspense fallback={null}>
+        <Suspense fallback={<BrandLoader />}>
           <ErrorBoundary key={location.pathname}>
           <Routes location={location}>
             <Route path="/" element={<RootRoute />} />

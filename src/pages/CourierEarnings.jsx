@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Box, Typography, CircularProgress, Chip, Alert } from "@mui/material";
 import AppShell from "../components/AppShell";
-import CollaboratorNav from "../components/CollaboratorNav";
 import { Stat, PeriodPicker } from "../components/ReportParts";
 import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
@@ -34,7 +33,6 @@ export default function CourierEarnings() {
 
   return (
     <AppShell title="Meus ganhos">
-      <CollaboratorNav />
       <PeriodPicker value={range} onChange={setRange} />
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {listError && <Alert severity="error" sx={{ mb: 2 }}>{listError}</Alert>}

@@ -3,6 +3,7 @@ import {
   Box, Typography, Button, TextField, Switch, CircularProgress, IconButton, Alert, Chip, MenuItem,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
+import CollapsibleSection, { MoreOptions } from "../../components/CollapsibleSection";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { money, parsePrice } from "../../utils/delivery";
@@ -76,8 +77,8 @@ function AutoDispatch({ company, onSave }) {
         <Box>
           <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Despachar sozinho para os motoboys em expediente</Typography>
           <Typography sx={{ fontSize: 12.5, color: "#78716C", maxWidth: 540 }}>
-            Quando um motoboy em expediente fica livre, o sistema monta a saída começando pelo pedido que espera há mais
-            tempo e junta os outros prontos até o máximo da loja, na ordem de menor trajeto. Pedido que fica pronto antes de o motoboy confirmar a saída entra nela. Desligue só se quiser montar as saídas à mão.
+            O sistema monta a saída para o motoboy livre, começando pelo pedido mais antigo e juntando os prontos na
+            melhor rota. Desligue só se quiser montar as saídas à mão.
           </Typography>
         </Box>
         <Switch checked={company.auto_dispatch} slotProps={{ input: { "aria-label": "Despacho automático" } }} onChange={(e) => onSave({ auto_dispatch: e.target.checked })} />
@@ -86,21 +87,25 @@ function AutoDispatch({ company, onSave }) {
         <TextField size="small" type="number" label="Máximo de entregas por saída" value={form.auto_max_stops}
           onChange={set("auto_max_stops")} inputProps={{ min: 1, max: 20 }}
           helperText="A saída junta os pedidos prontos até este número, na melhor rota." />
-        <TextField size="small" label="Desvio máximo para juntar um pedido (km)" value={form.auto_max_detour_km}
-          onChange={set("auto_max_detour_km")} inputMode="decimal"
-          helperText="0 = sem limite (a saída vai cheia). Use um valor para não juntar pedidos muito fora do caminho." />
-        <TextField select size="small" label="Despachar pedidos" value={form.auto_dispatch_when} onChange={set("auto_dispatch_when")}
-          helperText=" ">
-          <MenuItem value="ready">Quando marcados como prontos</MenuItem>
-          <MenuItem value="any">Assim que chegam (sem esperar ficar pronto)</MenuItem>
-        </TextField>
-        <TextField size="small" type="number" label="Esperar para juntar pedidos (min)" value={form.auto_hold_minutes}
-          onChange={set("auto_hold_minutes")} inputProps={{ min: 0, max: 30 }}
-          helperText="0 = sai assim que houver motoboy livre." />
-        <TextField size="small" type="number" label="Prazo para o motoboy iniciar a saída (min)" value={form.auto_accept_minutes}
-          onChange={set("auto_accept_minutes")} inputProps={{ min: 0, max: 60 }}
-          helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." />
       </Box>
+      <MoreOptions>
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5 }}>
+          <TextField size="small" label="Desvio máximo para juntar um pedido (km)" value={form.auto_max_detour_km}
+            onChange={set("auto_max_detour_km")} inputMode="decimal"
+            helperText="0 = sem limite (a saída vai cheia). Use um valor para não juntar pedidos muito fora do caminho." />
+          <TextField select size="small" label="Despachar pedidos" value={form.auto_dispatch_when} onChange={set("auto_dispatch_when")}
+            helperText=" ">
+            <MenuItem value="ready">Quando marcados como prontos</MenuItem>
+            <MenuItem value="any">Assim que chegam (sem esperar ficar pronto)</MenuItem>
+          </TextField>
+          <TextField size="small" type="number" label="Esperar para juntar pedidos (min)" value={form.auto_hold_minutes}
+            onChange={set("auto_hold_minutes")} inputProps={{ min: 0, max: 30 }}
+            helperText="0 = sai assim que houver motoboy livre." />
+          <TextField size="small" type="number" label="Prazo para o motoboy iniciar a saída (min)" value={form.auto_accept_minutes}
+            onChange={set("auto_accept_minutes")} inputProps={{ min: 0, max: 60 }}
+            helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." />
+        </Box>
+      </MoreOptions>
       {invalid && <Alert severity="error" sx={{ mt: 1.5 }}>{invalid}</Alert>}
       <Button variant="outlined" sx={{ mt: 1.5 }} onClick={save}>Salvar limites</Button>
     </>
@@ -150,15 +155,6 @@ function KitchenLink() {
       ) : (
         <Button variant="outlined" disabled={busy} onClick={() => get(false)}>Mostrar link da cozinha</Button>
       )}
-    </Box>
-  );
-}
-
-function Section({ title, children }) {
-  return (
-    <Box sx={{ p: 2.5, border: "1px solid #E7E5E4", borderRadius: "16px", background: "#fff", mb: 2 }}>
-      <Typography sx={{ fontWeight: 800, mb: 1.5 }}>{title}</Typography>
-      {children}
     </Box>
   );
 }
@@ -249,11 +245,14 @@ export function DeliverySettingsTab() {
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
       {saved && <Alert severity="success" sx={{ mb: 2 }}>{saved}</Alert>}
 
-      <Section title="Endereço da loja (ponto de partida)">
+      <CollapsibleSection id="entregas-endereco" title="Endereço da loja (ponto de partida)"
+        defaultOpen={!company.store_lat}
+        summary={company.store_street ? [company.store_street, company.store_number, company.store_neighborhood].filter(Boolean).join(", ") : "Ainda não informado: as rotas precisam dele"}>
         <StoreAddress key={company.id} company={company} onSaved={load} />
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Rotas">
+      <CollapsibleSection id="entregas-rotas" title="Rotas"
+        summary={`Rota exata ${company.strict_route_mode ? "ligada" : "desligada"} · desvio a partir de ${company.off_route_meters ?? 250} m`}>
         <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2 }}>
           <Box>
             <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Modo rota exata</Typography>
@@ -269,17 +268,19 @@ export function DeliverySettingsTab() {
             onChange={(e) => setMeters(e.target.value)} sx={{ width: 300 }} inputProps={{ min: 50, max: 5000 }} />
           <Button variant="outlined" onClick={saveMeters}>Salvar</Button>
         </Box>
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Despacho automático">
+      <CollapsibleSection id="entregas-despacho" title="Despacho automático"
+        summary={company.auto_dispatch ? `Ligado · até ${company.auto_max_stops} entregas por saída` : "Desligado: o gestor despacha à mão"}>
         <AutoDispatch key={`${company.id}-${company.auto_max_stops}-${company.auto_max_detour_km}`} company={company} onSave={updateCompany} />
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Tela da cozinha">
+      <CollapsibleSection id="entregas-cozinha" title="Tela da cozinha" summary="Link para abrir a fila de preparo numa TV ou tablet">
         <KitchenLink />
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Taxa do motoboy">
+      <CollapsibleSection id="entregas-taxa" title="Taxa do motoboy"
+        summary={(company.courier_fee_on_order ?? true) ? "Somada ao total do pedido" : "Não somada ao pedido"}>
         <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2 }}>
           <Box>
             <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Somar a taxa do motoboy ao total do pedido</Typography>
@@ -290,9 +291,11 @@ export function DeliverySettingsTab() {
           </Box>
           <Switch checked={company.courier_fee_on_order ?? true} onChange={(e) => updateCompany({ courier_fee_on_order: e.target.checked })} />
         </Box>
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Bairros atendidos e taxas">
+      <CollapsibleSection id="entregas-bairros" title="Bairros atendidos e taxas"
+        defaultOpen={zones.length === 0}
+        summary={zones.length ? `${zones.length} bairro${zones.length > 1 ? "s" : ""}: ${zones.slice(0, 4).map((z) => z.name).join(", ")}${zones.length > 4 ? "…" : ""}` : "Nenhum bairro cadastrado"}>
         <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "2fr 1fr 1fr auto" }, gap: 1, mb: 2 }}>
           <TextField size="small" label="Bairro" value={name} onChange={(e) => setName(e.target.value)} />
           <TextField size="small" label="Taxa (R$)" value={fee} onChange={(e) => setFee(e.target.value)} inputMode="decimal" />
@@ -311,9 +314,10 @@ export function DeliverySettingsTab() {
             </IconButton>
           </Box>
         ))}
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Recursos liberados pela plataforma">
+      <CollapsibleSection id="entregas-recursos" title="Recursos liberados pela plataforma"
+        summary={`Código de entrega ${company.feature_delivery_code ? "ativo" : "não liberado"} · marca própria ${company.feature_branding ? "liberada" : "não liberada"}`}>
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
           <Chip label={`Código de entrega: ${company.feature_delivery_code ? "ativo" : "não liberado"}`}
             color={company.feature_delivery_code ? "success" : "default"} variant="outlined" />
@@ -321,7 +325,7 @@ export function DeliverySettingsTab() {
             color={company.feature_branding ? "success" : "default"} variant="outlined" />
         </Box>
         <Typography sx={{ fontSize: 12, color: "#A8A29E", mt: 1 }}>Para liberar, fale com o administrador da plataforma.</Typography>
-      </Section>
+      </CollapsibleSection>
     </Box>
   );
 }
