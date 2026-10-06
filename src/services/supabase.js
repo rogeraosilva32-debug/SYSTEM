@@ -12,10 +12,11 @@ if (!supabaseUrl || !supabaseKey) {
   throw new Error("Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no arquivo .env (veja .env.example).");
 }
 
-// Link de "esqueci minha senha": guarda AGORA se a URL veio com
-// type=recovery, porque o supabase-js limpa o hash ao processar o token.
+// Link de "esqueci minha senha" ou de convite (primeiro acesso): guarda AGORA
+// se a URL veio com type=recovery/invite, porque o supabase-js limpa o hash
+// ao processar o token. Nos dois casos a pessoa cria a senha na tela própria.
 const urlText = typeof window !== "undefined" ? `${window.location.hash}&${window.location.search}` : "";
-export const passwordRecovery = { fromUrl: /[#&?]type=recovery(&|$)/.test(urlText), event: false };
+export const passwordRecovery = { fromUrl: /[#&?]type=(recovery|invite)(&|$)/.test(urlText), event: false };
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 

@@ -684,9 +684,9 @@ function StopList({ stops, setStops, fee }) {
           </Box>
           {o.status === "delivered" ? <StatusChip status="delivered" /> : (
             <>
-              <IconButton size="small" disabled={i === 0 || stops[i - 1]?.status === "delivered"} onClick={() => move(i, -1)}><ArrowUpwardIcon fontSize="small" /></IconButton>
-              <IconButton size="small" disabled={i === stops.length - 1} onClick={() => move(i, 1)}><ArrowDownwardIcon fontSize="small" /></IconButton>
-              <IconButton size="small" onClick={() => setStops(stops.filter((s) => s.id !== o.id))}><DeleteOutlineIcon fontSize="small" /></IconButton>
+              <IconButton size="small" aria-label="Subir parada" disabled={i === 0 || stops[i - 1]?.status === "delivered"} onClick={() => move(i, -1)}><ArrowUpwardIcon fontSize="small" /></IconButton>
+              <IconButton size="small" aria-label="Descer parada" disabled={i === stops.length - 1} onClick={() => move(i, 1)}><ArrowDownwardIcon fontSize="small" /></IconButton>
+              <IconButton size="small" aria-label="Tirar da saída" onClick={() => setStops(stops.filter((s) => s.id !== o.id))}><DeleteOutlineIcon fontSize="small" /></IconButton>
             </>
           )}
         </Box>
@@ -695,7 +695,7 @@ function StopList({ stops, setStops, fee }) {
   );
 }
 
-function RunDialog({ open, onClose, onDone, couriers, available, run, courierFees }) {
+function RunDialog({ open, onClose, onDone, couriers, available, run, courierFees, shifts = [], runs = [] }) {
   const settings = useCompanySettings();
   const storePoint = settings?.store_lat ? { lat: settings.store_lat, lng: settings.store_lng } : null;
   // `run` = saída existente (editar) ou null (nova saída com os `available` selecionados).
@@ -760,9 +760,17 @@ function RunDialog({ open, onClose, onDone, couriers, available, run, courierFee
       <DialogTitle sx={{ fontWeight: 800 }}>{run ? "Editar saída" : "Despachar pedidos"}</DialogTitle>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 1.5, pt: "8px !important" }}>
         <TextField select size="small" label="Motoboy" value={courierId} onChange={(e) => setCourierId(e.target.value)}>
-          {couriers.map((c) => (
-            <MenuItem key={c.id} value={c.id}>{c.name}{courierFees[c.id] ? ` · ${money(courierFees[c.id])} por entrega` : ""}</MenuItem>
-          ))}
+          {couriers.map((c) => {
+            // Só dá para passar a saída para quem não está com outra.
+            const busyRun = runs.some((r) => r.courier_id === c.id && r.id !== run?.id && ["planned", "in_progress"].includes(r.status));
+            const shift = shifts.find((sh) => sh.courier_id === c.id);
+            const state = busyRun ? "com outra saída" : shift ? (shift.paused ? "em pausa" : "livre, em expediente") : "fora do expediente";
+            return (
+              <MenuItem key={c.id} value={c.id} disabled={busyRun && c.id !== courierId}>
+                {c.name} · {state}{courierFees[c.id] ? ` · ${money(courierFees[c.id])} por entrega` : ""}
+              </MenuItem>
+            );
+          })}
         </TextField>
         {courierId && courierFees[courierId] > 0 && (
           <Alert severity="info" sx={{ py: 0 }}>
@@ -787,7 +795,12 @@ function RunDialog({ open, onClose, onDone, couriers, available, run, courierFee
             <Button disabled={!addId} onClick={() => { setStops([...stops, addable.find((o) => o.id === addId)]); setAddId(""); }}>Adicionar</Button>
           </Box>
         )}
-        {run && <Typography sx={{ fontSize: 11.5, color: "#A8A29E" }}>Pedidos removidos voltam para a fila como “Pronto”.</Typography>}
+        {run && (
+          <Typography sx={{ fontSize: 11.5, color: "#A8A29E" }}>
+            Pedidos removidos voltam para a fila como “Pronto”. Ao trocar o motoboy, o novo é avisado e tem o prazo inteiro para confirmar a saída.
+            Depois de editada, o despacho automático não junta outros pedidos nesta saída.
+          </Typography>
+        )}
         {error && <Alert severity="error">{error}</Alert>}
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -1037,7 +1050,13 @@ export function OrdersTab() {
                   {col === "ready" && blocks.map((b) => b.order ? card(b.order, col, b.pos) : (
                     <Box key={b.run} sx={{ border: "1px dashed #C9CDEB", background: "#EEF0FA", borderRadius: "12px", p: 0.8, pb: 0.1, mb: 1 }}>
                       <Typography sx={{ fontSize: 11.5, fontWeight: 800, color: "#4F5BA6", px: 0.4, mb: 0.2 }}>🛵 {b.courier || "Motoboy"}</Typography>
-                      <Typography sx={{ fontSize: 10.5, color: "#6B72A8", px: 0.4, mb: 0.6 }}>Aguardando o motoboy confirmar a saída</Typography>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.4, mb: 0.6 }}>
+                        <Typography sx={{ fontSize: 10.5, color: "#6B72A8", flex: 1 }}>Aguardando o motoboy confirmar a saída</Typography>
+                        <Button size="small" sx={{ minWidth: 0, py: 0, fontSize: 11 }}
+                          onClick={() => { const r = runsWithOrders.find((x) => x.id === b.run); if (r) setRunDialog({ open: true, run: r }); }}>
+                          Editar
+                        </Button>
+                      </Box>
                       {b.group.map((o) => card(o, col, b.pos.get(o.id)))}
                     </Box>
                   ))}
@@ -1077,6 +1096,7 @@ export function OrdersTab() {
       <OrderDetailDialog key={detail?.id || "none"} order={detail} company={company} onClose={() => setDetail(null)} onChanged={() => { setDetail(null); load(); }} />
       <RunDialog
         open={runDialog.open} run={runDialog.run} couriers={couriers} available={dispatchable} courierFees={courierFees}
+        shifts={shifts} runs={runs}
         onClose={() => setRunDialog({ open: false, run: null })}
         onDone={() => { setSelected(new Set()); load(); }}
       />

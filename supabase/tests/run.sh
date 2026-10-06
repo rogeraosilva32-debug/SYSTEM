@@ -17,7 +17,7 @@ done
 bash supabase/tests/aplicar_sem_superusuario.sh
 $PSQL -d "$DB" -f supabase/tests/10_seed.sql >/dev/null
 out=""
-for f in supabase/tests/2*.sql; do
+for f in supabase/tests/[2-9][0-9]_*.sql; do
   # Erro inesperado (fora dos testes) também conta como falha.
   out+=$(sudo -u postgres psql -X -q -d "$DB" -f "$f" 2>&1 | grep -oE '(PASSOU|FALHOU).*|ERROR:.*' | sed -E "s/^ERROR:/FALHOU erro inesperado em $(basename "$f"):/")$'\n'
 done
