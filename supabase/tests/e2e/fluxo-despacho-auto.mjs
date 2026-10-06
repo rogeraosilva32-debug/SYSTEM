@@ -66,7 +66,18 @@ await admin.getByText('Saída aguardando').waitFor();
 check('fila mostra a saída como automática', await admin.getByText('Automática', { exact: true }).isVisible());
 check('com o automático ligado não há despacho manual', (await admin.getByRole('button', { name: /^Despachar/ }).count()) === 0);
 check('aviso de despacho automático', await admin.getByText(/Despacho automático ligado: cada saída/).isVisible());
+check('pedidos da saída continuam na fila de prontos', sql(`select string_agg(distinct status, ',') from delivery_orders where courier_id = '00000000-0000-0000-0000-0000000000c1'`) === 'ready');
+check('fila de prontos mostra quem vai levar', await admin.getByText(/aguardando o motoboy confirmar a saída/).first().isVisible());
+check('fila de prontos numerada', (await admin.getByTestId('ready-order').first().innerText()).startsWith('1º'));
 await admin.screenshot({ path: `${SHOTS}/52-fila-expediente.png`, fullPage: true });
+
+// ───────── Motoboy confirma a saída: pedidos vão para Em rota ─────────
+await c1.getByRole('button', { name: 'Confirmar saída para entrega' }).click();
+await c1.getByText(/Saída confirmada/).waitFor();
+check('confirmar saída põe os pedidos em rota', sql(`select string_agg(distinct status, ',') from delivery_orders where courier_id = '00000000-0000-0000-0000-0000000000c1'`) === 'on_route');
+await admin.reload();
+await admin.getByText('EM EXPEDIENTE', { exact: true }).waitFor();
+check('saem da fila de prontos', (await admin.getByText(/aguardando o motoboy confirmar a saída/).count()) === 0);
 
 // ───────── Segundo motoboy pega o pedido que sobrou ─────────
 const c2 = await open('c2@t', { latitude: -23.5505, longitude: -46.6333 });

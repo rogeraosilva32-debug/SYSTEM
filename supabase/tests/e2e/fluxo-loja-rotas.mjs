@@ -183,11 +183,11 @@ const courierCtx = await browser.newContext({ viewport: { width: 390, height: 84
 await mockExternal(courierCtx);
 const courier = await courierCtx.newPage(); watch(courier, 'motoboy');
 await login(courier, 'c1@t');
-await courier.getByRole('button', { name: 'Iniciar saída' }).waitFor();
+await courier.getByRole('button', { name: 'Confirmar saída para entrega' }).waitFor();
 await courier.getByText(/Trajeto da loja por 2 parada/).waitFor();
 log('saída planejada mostra o trajeto:', await courier.getByText(/Trajeto da loja por 2 parada/).innerText());
 await courier.screenshot({ path: `${SHOTS}/33-motoboy-trajeto.png`, fullPage: true });
-await courier.getByRole('button', { name: 'Iniciar saída' }).click();
+await courier.getByRole('button', { name: 'Confirmar saída para entrega' }).click();
 await courier.getByText('Principal (mais rápida)').waitFor();
 log('rotas da 1ª parada sem GPS:', await courier.getByText(/min · .* km/).count(), 'opção(ões)');
 await courier.screenshot({ path: `${SHOTS}/34-motoboy-rota-sem-gps.png`, fullPage: true });

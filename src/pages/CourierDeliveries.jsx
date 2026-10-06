@@ -375,8 +375,8 @@ export default function CourierDeliveries() {
             </Box>
           ))}
           <Button fullWidth variant="contained" size="large" startIcon={<PlayArrowIcon />} sx={{ mt: 1, py: 1.4 }} disabled={busy}
-            onClick={() => call(() => supabase.rpc("start_run", { p_run: plannedRun.id }), "Saída iniciada. Boa entrega!")}>
-            Iniciar saída
+            onClick={() => call(() => supabase.rpc("start_run", { p_run: plannedRun.id }), "Saída confirmada: pedidos em rota. Boa entrega!")}>
+            Confirmar saída para entrega
           </Button>
         </Box>
       )}
