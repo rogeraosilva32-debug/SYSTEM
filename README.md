@@ -582,6 +582,10 @@ Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.
   (inserção mais barata no trajeto loja → paradas → loja), respeitando o
   máximo de entregas e o desvio máximo da empresa. Não enche até o máximo:
   só junta o que compensa.
+- **Ligado por padrão** (desde 06/10/2026): empresas novas e as que já
+  existiam (uma única vez, marcado em `schema_flags`). Com ele ligado a fila
+  não mostra o "Despachar" manual; mostra um aviso quando não há motoboy em
+  expediente. Para montar saídas à mão, desligue nos ajustes.
 - **Quando roda**: pedido fica pronto (ou chega, se configurado), saída
   termina, motoboy entra/volta do expediente, ajustes mudam; e a cada minuto
   pelo pg_cron (se disponível) e a cada 30 s pelas telas abertas.

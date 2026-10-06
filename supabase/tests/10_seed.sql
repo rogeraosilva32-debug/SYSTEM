@@ -37,3 +37,7 @@ insert into public.assignment_photos (assignment_id, company_id, kind, url) valu
  ('a5000000-0000-0000-0000-0000000000c2','aaaaaaaa-0000-0000-0000-000000000000','after','x');
 insert into public.api_keys (company_id, key) values ('aaaaaaaa-0000-0000-0000-000000000000','sa_segredo');
 insert into public.crm_integrations (company_id, api_key) values ('aaaaaaaa-0000-0000-0000-000000000000','crm_segredo');
+
+-- Os testes antigos montam saídas à mão; o despacho automático (padrão
+-- ligado) é testado em 26_despacho_auto.sql.
+update public.companies set auto_dispatch = false;

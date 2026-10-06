@@ -848,6 +848,7 @@ export function OrdersTab() {
   const [zones, setZones] = useState([]);
   const [couriers, setCouriers] = useState([]);
   const [company, setCompany] = useState(null);
+  const [autoDispatch, setAutoDispatch] = useState(false);
   const [menu, setMenu] = useState({ items: [], addons: [] });
   const [courierFees, setCourierFees] = useState({});
   const [shifts, setShifts] = useState([]);
@@ -860,7 +861,7 @@ export function OrdersTab() {
 
   const load = useCallback(async () => {
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-    const [o, r, z, c, comp, d, cats, prods, fees, sh] = await Promise.all([
+    const [o, r, z, c, comp, d, cats, prods, fees, sh, ad] = await Promise.all([
       supabase.from("delivery_orders").select("*, courier:courier_id(name)").eq("company_id", companyId)
         .in("status", COLUMNS).order("created_at"),
       supabase.from("delivery_runs").select("*, courier:courier_id(name)").eq("company_id", companyId)
@@ -874,7 +875,9 @@ export function OrdersTab() {
       supabase.from("products").select("*").eq("company_id", companyId).eq("active", true).order("sort_order").order("name"),
       supabase.rpc("my_courier_fees"),
       supabase.from("courier_shifts").select("id, courier_id, started_at, paused, paused_reason").eq("company_id", companyId).is("ended_at", null).order("started_at"),
+      supabase.from("companies").select("auto_dispatch").eq("id", companyId).maybeSingle(),
     ]);
+    setAutoDispatch(ad.data?.auto_dispatch === true);
     setShifts(sh.data || []);
     // Cardápio do pedido: só produtos ativos de categorias visíveis, na ordem das categorias.
     const catList = (cats.data || []).slice().sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
@@ -938,15 +941,19 @@ export function OrdersTab() {
   };
 
   if (orders === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  const auto = autoDispatch;
 
   return (
     <Box>
       <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap", alignItems: "center" }}>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setShowNew(true)}>Novo pedido</Button>
-        <Button variant="outlined" startIcon={<TwoWheelerIcon />} disabled={selected.size === 0}
-          onClick={() => setRunDialog({ open: true, run: null })}>
-          Despachar {selected.size > 0 ? `(${selected.size})` : ""}
-        </Button>
+        {/* Com o despacho automático ligado, o sistema monta as saídas sozinho. */}
+        {!auto && (
+          <Button variant="outlined" startIcon={<TwoWheelerIcon />} disabled={selected.size === 0}
+            onClick={() => setRunDialog({ open: true, run: null })}>
+            Despachar {selected.size > 0 ? `(${selected.size})` : ""}
+          </Button>
+        )}
         <Button variant="text" startIcon={<SoupKitchenIcon />} onClick={() => window.open("/cozinha", "_blank", "noopener")}>
           Modo cozinha
         </Button>
@@ -954,6 +961,13 @@ export function OrdersTab() {
           Entregues hoje: {deliveredToday}
         </Typography>
       </Box>
+      {auto && (
+        <Alert severity={shifts.some((sh) => !sh.paused) ? "info" : "warning"} sx={{ mb: 2 }}>
+          {shifts.some((sh) => !sh.paused)
+            ? "Despacho automático ligado: cada saída vai sozinha para o motoboy livre em expediente, com a melhor rota."
+            : "Despacho automático ligado, mas nenhum motoboy está em expediente. Os pedidos esperam até alguém tocar em “Iniciar expediente” no app."}
+        </Alert>
+      )}
       <ShiftPanel shifts={shifts} couriers={couriers} runs={runs} onChanged={load} />
       {zones.length === 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>Cadastre os bairros atendidos e as taxas na aba “Entregas: ajustes” para a taxa ser preenchida sozinha.</Alert>
@@ -974,7 +988,7 @@ export function OrdersTab() {
                 <Box key={o.id} onClick={() => setDetail(o)}
                   sx={{ background: "#fff", border: "1px solid #E7E5E4", borderRadius: "12px", p: 1.2, mb: 1, cursor: "pointer", "&:hover": { borderColor: "#D6D3D1" } }}>
                   <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                    {["received", "preparing", "ready"].includes(o.status) && !o.run_id && !isLocal(o) && (
+                    {!auto && ["received", "preparing", "ready"].includes(o.status) && !o.run_id && !isLocal(o) && (
                       <Checkbox size="small" sx={{ p: 0.3 }} checked={selected.has(o.id)}
                         onClick={(e) => e.stopPropagation()} onChange={() => toggle(o.id)} />
                     )}

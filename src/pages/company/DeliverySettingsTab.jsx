@@ -77,7 +77,7 @@ function AutoDispatch({ company, onSave }) {
           <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Despachar sozinho para os motoboys em expediente</Typography>
           <Typography sx={{ fontSize: 12.5, color: "#78716C", maxWidth: 540 }}>
             Quando um motoboy em expediente fica livre, o sistema monta a saída começando pelo pedido que espera há mais
-            tempo e junta os que ficam no caminho, na ordem de menor trajeto. Você ainda pode despachar à mão.
+            tempo e junta os que ficam no caminho, na ordem de menor trajeto. Desligue só se quiser montar as saídas à mão.
           </Typography>
         </Box>
         <Switch checked={company.auto_dispatch} slotProps={{ input: { "aria-label": "Despacho automático" } }} onChange={(e) => onSave({ auto_dispatch: e.target.checked })} />

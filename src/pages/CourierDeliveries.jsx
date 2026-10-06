@@ -108,8 +108,17 @@ function useWakeLock(active) {
 
 // Expediente: com ele aberto (e sem pausa) o motoboy recebe as saídas do
 // despacho automático. Pausar devolve a saída ainda não iniciada.
-function ShiftBar({ shift, onChange, onError }) {
+function ShiftBar({ shift, unavailable, onChange, onError }) {
   const [busy, setBusy] = useState(false);
+  if (shift === undefined && unavailable) {
+    // Sem o expediente o motoboy não recebe saídas automáticas: avisa em vez de sumir com o botão.
+    return (
+      <Alert severity="warning" sx={{ mb: 2 }}
+        action={<Button size="small" color="inherit" onClick={onChange}>Tentar de novo</Button>}>
+        Não foi possível carregar o expediente. Se continuar, avise o gestor: o banco de dados pode estar desatualizado.
+      </Alert>
+    );
+  }
   if (shift === undefined) return null;
   const run = async (fn) => {
     if (busy) return;
@@ -172,6 +181,7 @@ export default function CourierDeliveries() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [shift, setShift] = useState(undefined);
+  const [shiftUnavailable, setShiftUnavailable] = useState(false);
   const lastPing = useRef(0);
   const routeFrom = useRef(null);
   const offRef = useRef(false);
@@ -185,6 +195,7 @@ export default function CourierDeliveries() {
     ]);
     // Falha de rede: mantém o expediente que já estava na tela.
     if (!s.error) setShift(s.data || null);
+    setShiftUnavailable(Boolean(s.error));
     if (c.data) setCompany(c.data);
     // Falha: mantém a saída que já estava na tela; a próxima recarga tenta de novo.
     if (r.error) { setRuns((prev) => prev ?? []); return; }
@@ -342,7 +353,7 @@ export default function CourierDeliveries() {
   return (
     <AppShell title="Minhas entregas">
       <CollaboratorNav />
-      <ShiftBar shift={shift} onChange={load} onError={(text) => setMsg({ type: "error", text })} />
+      <ShiftBar shift={shift} unavailable={shiftUnavailable} onChange={load} onError={(text) => setMsg({ type: "error", text })} />
       {msg && <Alert severity={msg.type} sx={{ mb: 2 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       {geoError && <Alert severity="warning" sx={{ mb: 2 }}>{geoError}</Alert>}
 

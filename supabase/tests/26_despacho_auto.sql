@@ -90,4 +90,8 @@ select tests.as_user('00000000-0000-0000-0000-0000000000b1');
 select tests.ok('outra empresa não vê expedientes', (select count(*) from courier_shifts) = 0);
 select tests.bloqueado('outra empresa não encerra expediente alheio', format($q$select end_shift(%L)$q$,
   (select id from courier_shifts where courier_id = '00000000-0000-0000-0000-0000000000c1' and ended_at is null)));
+reset role;
+insert into companies (name, license_key, collaborator_invite_code) values ('Nova', 'LIC-N', 'INV-N') returning auto_dispatch as nova_auto \gset
+select tests.ok('empresa nova já nasce com despacho automático', :'nova_auto'::boolean);
+select tests.ok('ligado uma vez só para as empresas antigas', (select count(*) from schema_flags where name = 'auto_dispatch_on') = 1);
 rollback;

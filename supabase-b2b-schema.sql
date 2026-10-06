@@ -2975,6 +2975,18 @@ alter table public.companies add column if not exists auto_accept_minutes intege
 alter table public.companies add column if not exists auto_dispatch_when text not null default 'ready'
   check (auto_dispatch_when in ('ready', 'any'));
 
+-- Despacho automático é o padrão (06/10/2026). Liga uma única vez para as
+-- empresas que já existiam; quem desligar depois nos ajustes continua desligado.
+alter table public.companies alter column auto_dispatch set default true;
+create table if not exists public.schema_flags (name text primary key, applied_at timestamptz not null default now());
+alter table public.schema_flags enable row level security;
+do $$ begin
+  if not exists (select 1 from public.schema_flags where name = 'auto_dispatch_on') then
+    update public.companies set auto_dispatch = true where not auto_dispatch;
+    insert into public.schema_flags (name) values ('auto_dispatch_on');
+  end if;
+end $$;
+
 alter table public.courier_shifts add column if not exists paused boolean not null default false;
 alter table public.courier_shifts add column if not exists paused_reason text;
 alter table public.delivery_runs add column if not exists auto boolean not null default false;

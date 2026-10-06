@@ -51,6 +51,7 @@ check('sem motoboy em expediente, nada sai', sql(`select count(*) from delivery_
 
 // ───────── Motoboy inicia o expediente ─────────
 const c1 = await open('c1@t', { latitude: -23.5505, longitude: -46.6333 });
+check('motoboy vê o botão de expediente', await c1.getByRole('button', { name: 'Iniciar expediente' }).isVisible());
 await c1.getByRole('button', { name: 'Iniciar expediente' }).click();
 await c1.getByText(/Nova saída: 2 parada/).waitFor({ timeout: 10000 });
 await c1.screenshot({ path: `${SHOTS}/51-motoboy-saida-automatica.png`, fullPage: true });
@@ -60,9 +61,11 @@ check('pedido longe fica na fila', sql(`select courier_id is null from delivery_
 
 // ───────── Admin vê o expediente e a saída automática ─────────
 await admin.getByText('Pedidos', { exact: true }).click();
-await admin.getByText('EM EXPEDIENTE').waitFor();
+await admin.getByText('EM EXPEDIENTE', { exact: true }).waitFor();
 await admin.getByText('Saída aguardando').waitFor();
 check('fila mostra a saída como automática', await admin.getByText('Automática', { exact: true }).isVisible());
+check('com o automático ligado não há despacho manual', (await admin.getByRole('button', { name: /^Despachar/ }).count()) === 0);
+check('aviso de despacho automático', await admin.getByText(/Despacho automático ligado: cada saída/).isVisible());
 await admin.screenshot({ path: `${SHOTS}/52-fila-expediente.png`, fullPage: true });
 
 // ───────── Segundo motoboy pega o pedido que sobrou ─────────
