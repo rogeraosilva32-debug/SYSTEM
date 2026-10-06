@@ -26,6 +26,13 @@ import BusinessOutlinedIcon from "@mui/icons-material/BusinessOutlined";
 import PieChartOutlineIcon from "@mui/icons-material/PieChartOutlined";
 import ReceiptOutlinedIcon from "@mui/icons-material/ReceiptOutlined";
 import TerminalIcon from "@mui/icons-material/Terminal";
+import WorkspacesOutlinedIcon from "@mui/icons-material/WorkspacesOutlined";
+import CampaignOutlinedIcon from "@mui/icons-material/CampaignOutlined";
+import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+import PlatformPlans, { PlanPicker } from "./platform/PlatformPlans";
+import PlatformNoticesAdmin from "./platform/PlatformNoticesAdmin";
 
 function copyToClipboard(text) {
   navigator.clipboard?.writeText(text).catch(() => {});
@@ -94,6 +101,20 @@ function CompanyDetail({ company, onBack, onUpdated }) {
   // Qual ação está rodando (desabilita os botões) e erro da última ação.
   const [busy, setBusy] = useState(null);
   const [actionError, setActionError] = useState("");
+  const { startSupport } = useAuth();
+  const navigate = useNavigate();
+
+  // Abre o painel da empresa como o gestor dela vê, só para olhar.
+  const viewAsCompany = async () => {
+    setBusy("support");
+    try {
+      await startSupport(company);
+      navigate("/painel");
+    } catch (err) {
+      setActionError(err?.message || "Não foi possível abrir o modo suporte.");
+      setBusy(null);
+    }
+  };
 
   const load = useCallback(async () => {
     const [c, s, a] = await Promise.all([
@@ -164,16 +185,26 @@ function CompanyDetail({ company, onBack, onUpdated }) {
             }}
           />
         </Box>
-        <FormControlLabel
-          control={<Switch checked={company.status === "active"} onChange={toggleStatus} disabled={!!busy} />}
-          label={<Typography sx={{ fontSize: 13, fontWeight: 600, color: "#57534E" }}>Empresa ativa</Typography>}
-        />
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+          <Tooltip title="Abre o painel desta empresa como o gestor vê. Só leitura: nada pode ser alterado.">
+            <span>
+              <Button variant="outlined" startIcon={<VisibilityOutlinedIcon />} onClick={viewAsCompany} disabled={!!busy}>
+                Ver como empresa
+              </Button>
+            </span>
+          </Tooltip>
+          <FormControlLabel
+            control={<Switch checked={company.status === "active"} onChange={toggleStatus} disabled={!!busy} />}
+            label={<Typography sx={{ fontSize: 13, fontWeight: 600, color: "#57534E" }}>Empresa ativa</Typography>}
+          />
+        </Box>
       </Box>
 
       {actionError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError("")}>{actionError}</Alert>}
 
       <CollapsibleSection id="plataforma-licenca" title="Licença, convite e vagas"
         summary={`${collaborators?.length ?? "…"} de ${company.seats_limit} vagas usadas · chave ${company.license_key}`}>
+      <PlanPicker key={company.plan_id || "sem"} company={company} onApplied={onUpdated} disabled={!!busy} />
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 2, mb: 2 }}>
         <Box sx={{ border: "1px solid #E7E5E4", borderRadius: "14px", p: 2.5, background: "#fff" }}>
           <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#78716C", mb: 1 }}>CHAVE DE LICENÇA</Typography>
@@ -337,6 +368,8 @@ function CompanyDetail({ company, onBack, onUpdated }) {
 const VIEWS = [
   { key: "overview", label: "Visão geral", icon: <SpaceDashboardOutlinedIcon /> },
   { key: "companies", label: "Empresas", icon: <BusinessOutlinedIcon /> },
+  { key: "plans", label: "Planos", icon: <WorkspacesOutlinedIcon /> },
+  { key: "notices", label: "Avisos", icon: <CampaignOutlinedIcon /> },
   { key: "usage", label: "Uso de licenças", icon: <PieChartOutlineIcon /> },
   { key: "invoices", label: "Faturas", icon: <ReceiptOutlinedIcon /> },
   { key: "log", label: "Log do sistema", icon: <TerminalIcon /> },
@@ -349,9 +382,24 @@ export default function PlatformAdmin() {
   const [view, setViewRaw] = useTab(VIEWS.map((v) => v.key), "overview");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [alertCount, setAlertCount] = useState(0);
+  const navItems = VIEWS.map((v) => (v.key === "overview" ? { ...v, badge: alertCount } : v));
+
+  // Número no menu: alertas abertos que ninguém marcou como vistos.
+  useEffect(() => {
+    let cancelled = false;
+    const count = () => supabase.rpc("platform_alerts_list").then(({ data, error }) => {
+      if (!cancelled && !error) setAlertCount((data || []).filter((a) => !a.seen_at).length);
+    });
+    count();
+    const t = setInterval(() => { if (!document.hidden) count(); }, 60000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from("companies").select("*").order("created_at", { ascending: false });
+    // Com o nome do plano; sem o script novo no banco, carrega sem ele.
+    let { data, error } = await supabase.from("companies").select("*, plan:plan_id(name)").order("created_at", { ascending: false });
+    if (error) ({ data } = await supabase.from("companies").select("*").order("created_at", { ascending: false }));
     setCompanies(data || []);
   }, []);
 
@@ -359,8 +407,8 @@ export default function PlatformAdmin() {
   useEffect(() => { load(); }, [load]);
 
   const handleUpdated = (updated) => {
-    setSelected(updated);
-    setCompanies((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    setSelected((prev) => ({ ...prev, ...updated }));
+    setCompanies((prev) => prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)));
   };
   const setView = (key) => { setSelected(null); setViewRaw(key); };
   const openCompany = (id) => { const c = companies?.find((x) => x.id === id); if (c) { setViewRaw("companies"); setSelected(c); } };
@@ -372,7 +420,7 @@ export default function PlatformAdmin() {
   return (
     <AppShell
       title={selected ? selected.name : VIEWS.find((v) => v.key === view)?.label}
-      nav={{ items: VIEWS, current: view, onSelect: setView }}
+      nav={{ items: navItems, current: view, onSelect: setView }}
       actions={!selected && view === "companies" && (
         <Button startIcon={<AddIcon />} variant="contained" onClick={() => setDialogOpen(true)} sx={{ borderRadius: "10px" }}>
           Nova empresa
@@ -380,7 +428,11 @@ export default function PlatformAdmin() {
       )}
     >
       {!selected && view === "overview" ? (
-        <PlatformOverview onOpenCompany={openCompany} onOpenLog={() => setView("log")} />
+        <PlatformOverview onOpenCompany={openCompany} onOpenLog={() => setView("log")} onAlertCount={setAlertCount} />
+      ) : !selected && view === "plans" ? (
+        <PlatformPlans />
+      ) : !selected && view === "notices" ? (
+        <PlatformNoticesAdmin companies={companies || []} />
       ) : !selected && view === "usage" ? (
         <LicenseUsage onOpenCompany={openCompany} />
       ) : !selected && view === "invoices" ? (
@@ -409,6 +461,7 @@ export default function PlatformAdmin() {
             <TableRow>
               <TableCell>Empresa</TableCell>
               <TableCell>Status</TableCell>
+              <TableCell>Plano</TableCell>
               <TableCell>Vagas</TableCell>
               <TableCell>Criada em</TableCell>
             </TableRow>
@@ -427,6 +480,7 @@ export default function PlatformAdmin() {
                     }}
                   />
                 </TableCell>
+                <TableCell>{c.plan?.name || "—"}</TableCell>
                 <TableCell>{c.seats_limit}</TableCell>
                 <TableCell>{new Date(c.created_at).toLocaleDateString("pt-BR")}</TableCell>
               </TableRow>

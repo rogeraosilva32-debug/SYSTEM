@@ -17,6 +17,7 @@ import useUnreadMessages from "../hooks/useUnreadMessages";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import NotificationBell from "./NotificationBell";
+import { SupportBanner, PlatformNotices } from "./PlatformBanners";
 import { pushSupported, subscribeToPush } from "../utils/pushNotifications";
 
 const ROLE_LABEL = {
@@ -194,6 +195,7 @@ export default function AppShell({ title, actions, children, nav }) {
       )}
 
       <Box sx={{ flex: 1, minWidth: 0 }}>
+        <SupportBanner />
         <Box className="no-print" sx={{
           position: "sticky", top: 0, zIndex: 10,
           background: "rgba(250,250,249,0.9)", backdropFilter: "blur(10px)",
@@ -253,6 +255,7 @@ export default function AppShell({ title, actions, children, nav }) {
         </Box>
 
         <Box sx={{ px: { xs: 2, sm: 4 }, py: { xs: 3, sm: 4 }, maxWidth: 1100, mx: "auto" }}>
+          <PlatformNotices />
           <ThemeProvider theme={theme}>{children}</ThemeProvider>
         </Box>
       </Box>

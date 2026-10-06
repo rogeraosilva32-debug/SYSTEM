@@ -4,6 +4,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import supabase from "../../services/supabase";
 import { Stat, StatGrid, Section } from "../../components/ReportParts";
 import { money } from "../../utils/delivery";
+import PlatformAlerts from "./PlatformAlerts";
 
 const REFRESH_MS = 60000;
 
@@ -15,10 +16,9 @@ const ago = (iso) => {
   return `há ${days} dias`;
 };
 
-// Primeira tela da plataforma: como estão todas as empresas agora, o que
-// precisa de atenção (problemas, faturas vencidas, empresas paradas) e
-// atalhos para a empresa ou para o log.
-export default function PlatformOverview({ onOpenCompany, onOpenLog }) {
+// Primeira tela da plataforma: como estão todas as empresas agora, os
+// alertas abertos e atalhos para a empresa ou para o log.
+export default function PlatformOverview({ onOpenCompany, onOpenLog, onAlertCount }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -45,15 +45,7 @@ export default function PlatformOverview({ onOpenCompany, onOpenLog }) {
   if (data === false) return <Alert severity="warning">{error}</Alert>;
 
   const t = data.today || {};
-  const now = new Date(data.generated_at || 0).getTime();
   const companies = data.per_company || [];
-  const attention = [
-    ...companies.filter((c) => c.problems_now > 0).map((c) => ({ c, text: `${c.problems_now} pedido(s) com problema agora`, tone: "bad" })),
-    ...companies.filter((c) => c.overdue_invoices > 0).map((c) => ({ c, text: `fatura vencida: ${money(c.overdue_amount)}`, tone: "bad" })),
-    ...companies.filter((c) => c.status === "active" && c.seats_limit && c.seats_used >= c.seats_limit).map((c) => ({ c, text: `usando todas as ${c.seats_limit} vagas`, tone: "warn" })),
-    ...companies.filter((c) => c.status === "active" && (!c.last_order_at || now - new Date(c.last_order_at).getTime() > 7 * 86400e3))
-      .map((c) => ({ c, text: `sem pedidos ${c.last_order_at ? `desde ${ago(c.last_order_at)}` : "ainda"}`, tone: "warn" })),
-  ];
   const log = data.log_24h || {};
 
   return (
@@ -76,20 +68,7 @@ export default function PlatformOverview({ onOpenCompany, onOpenLog }) {
         <Stat label="Quedas de conexão (24 h)" value={log.offline_events ?? 0} hint="internet, servidor ou GPS" tone={log.offline_events ? "warn" : undefined} />
       </StatGrid>
 
-      <Section title="Precisa de atenção" actions={<Button size="small" onClick={onOpenLog} sx={{ textTransform: "none", fontWeight: 700 }}>Abrir o log</Button>}>
-        {attention.length === 0 ? (
-          <Typography sx={{ fontSize: 13, color: "#4B7A5E", fontWeight: 600 }}>Tudo certo por aqui.</Typography>
-        ) : attention.map((a, i) => (
-          <Box key={i} onClick={() => onOpenCompany(a.c.id)} sx={{
-            display: "flex", alignItems: "center", gap: 1, py: 1, borderTop: i ? "1px solid #F5F5F4" : 0, cursor: "pointer",
-            "&:hover": { background: "#FAFAF9" },
-          }}>
-            <Box sx={{ width: 8, height: 8, borderRadius: "50%", background: a.tone === "bad" ? "#B0463D" : "#B0793D", flexShrink: 0 }} />
-            <Typography sx={{ fontSize: 13.5, fontWeight: 700 }}>{a.c.name}</Typography>
-            <Typography sx={{ fontSize: 13, color: "#57534E" }}>{a.text}</Typography>
-          </Box>
-        ))}
-      </Section>
+      <PlatformAlerts onOpenCompany={onOpenCompany} onOpenLog={onOpenLog} onCount={onAlertCount} />
 
       <Section title="Empresas hoje">
         <Box sx={{ overflowX: "auto" }}>
