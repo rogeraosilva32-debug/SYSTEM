@@ -52,19 +52,33 @@ select tests.ok('ao voltar a receber, ganha o pedido de novo', (select courier_i
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
 select tests.bloqueado('motoboy não pausa outro motoboy', $q$select set_shift_paused(true, '00000000-0000-0000-0000-0000000000c2')$q$);
 
--- ---------- Terminou a saída: recebe a próxima ----------
+-- ---------- Pedido novo entra na saída ainda não confirmada ----------
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
 update delivery_orders set status = 'ready' where id = :'o4';
-select tests.ok('pedido pronto sem motoboy livre espera', (select run_id is null from delivery_orders where id = :'o4'));
+select tests.ok('pedido que fica pronto entra na saída que o motoboy ainda não confirmou',
+  (select courier_id = '00000000-0000-0000-0000-0000000000c1' from delivery_orders where id = :'o4')
+  and (select count(*) from delivery_orders where courier_id = '00000000-0000-0000-0000-0000000000c1') = 3);
+select tests.ok('rota refeita sem repetir parada',
+  (select count(distinct stop_sequence) = 3 and min(stop_sequence) = 1 and max(stop_sequence) = 3
+   from delivery_orders where courier_id = '00000000-0000-0000-0000-0000000000c1'));
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
+select tests.ok('motoboy é avisado da saída atualizada', (select count(*) from notifications where title = 'Saída atualizada') = 1);
 select start_run(id) from delivery_runs where courier_id = '00000000-0000-0000-0000-0000000000c1' and status = 'planned';
+select tests.ok('confirmar a saída põe todos em rota', (select bool_and(status = 'on_route') from delivery_orders where courier_id = '00000000-0000-0000-0000-0000000000c1'));
+
+-- ---------- Terminou a saída: recebe a próxima ----------
+reset role;
+insert into delivery_orders (company_id, customer_name, lat, lng, subtotal, status, ready_at) values
+  ('aaaaaaaa-0000-0000-0000-000000000000', 'O5', -23.5405, -46.6295, 10, 'ready', now() - interval '1 minute') returning id as o5 \gset
+select tests.as_user('00000000-0000-0000-0000-0000000000c1');
 select complete_delivery(:'o1');
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
-select tests.ok('no meio da saída não recebe outra', (select run_id is null from delivery_orders where id = :'o4'));
+select tests.ok('no meio da saída não recebe outra', (select run_id is null from delivery_orders where id = :'o5'));
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
 select complete_delivery(:'o2');
+select complete_delivery(:'o4');
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
-select tests.ok('ao terminar a saída, recebe o próximo pedido', (select courier_id = '00000000-0000-0000-0000-0000000000c1' from delivery_orders where id = :'o4'));
+select tests.ok('ao terminar a saída, recebe o próximo pedido', (select courier_id = '00000000-0000-0000-0000-0000000000c1' from delivery_orders where id = :'o5'));
 
 -- ---------- Encerrar expediente ----------
 select tests.as_user('00000000-0000-0000-0000-0000000000c2');
@@ -78,12 +92,30 @@ select tests.as_user('00000000-0000-0000-0000-0000000000a1');
 update companies set auto_hold_minutes = 30 where id = 'aaaaaaaa-0000-0000-0000-000000000000';
 select tests.as_user('00000000-0000-0000-0000-0000000000c1');
 select start_run(id) from delivery_runs where courier_id = '00000000-0000-0000-0000-0000000000c1' and status = 'planned';
-select complete_delivery(:'o4');
+select complete_delivery(:'o5');
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
 select tests.ok('pedido que espera menos que o tempo mínimo aguarda', (select run_id is null from delivery_orders where id = :'o3'));
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');
 update companies set auto_hold_minutes = 0, auto_max_stops = 1 where id = 'aaaaaaaa-0000-0000-0000-000000000000';
 select tests.ok('ao mudar o ajuste, despacha', (select courier_id = '00000000-0000-0000-0000-0000000000c1' from delivery_orders where id = :'o3'));
+
+-- ---------- Sem limite de desvio: rota inteira até o máximo da loja ----------
+reset role;
+insert into delivery_orders (company_id, customer_name, lat, lng, subtotal, status, ready_at) values
+  ('aaaaaaaa-0000-0000-0000-000000000000', 'O6', -23.5600, -46.6600, 10, 'ready', now() - interval '3 minutes'),
+  ('aaaaaaaa-0000-0000-0000-000000000000', 'O7', -23.5300, -46.6000, 10, 'ready', now() - interval '2 minutes'),
+  ('aaaaaaaa-0000-0000-0000-000000000000', 'O8', -23.5700, -46.6100, 10, 'ready', now() - interval '1 minute'),
+  ('aaaaaaaa-0000-0000-0000-000000000000', 'O9', -23.5200, -46.6500, 10, 'ready', now());
+select tests.as_user('00000000-0000-0000-0000-0000000000a1');
+update companies set auto_max_stops = 4, auto_max_detour_km = 0 where id = 'aaaaaaaa-0000-0000-0000-000000000000';
+select tests.ok('saída não confirmada vai cheia até o máximo da loja',
+  (select count(*) from delivery_orders where courier_id = '00000000-0000-0000-0000-0000000000c1' and status = 'ready') = 4);
+select tests.ok('o mais antigo da fila não fica para trás',
+  (select courier_id = '00000000-0000-0000-0000-0000000000c1' from delivery_orders where id = :'o3'));
+select tests.ok('o que passou do máximo espera a próxima saída',
+  (select count(*) from delivery_orders where company_id = 'aaaaaaaa-0000-0000-0000-000000000000' and status = 'ready' and run_id is null) = 1);
+select tests.ok('empresa nova: desvio sem limite por padrão',
+  (select column_default from information_schema.columns where table_name = 'companies' and column_name = 'auto_max_detour_km') like '0%');
 
 -- ---------- Outra empresa ----------
 select tests.as_user('00000000-0000-0000-0000-0000000000b1');

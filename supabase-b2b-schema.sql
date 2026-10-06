@@ -2978,12 +2978,18 @@ alter table public.companies add column if not exists auto_dispatch_when text no
 -- Despacho automático é o padrão (06/10/2026). Liga uma única vez para as
 -- empresas que já existiam; quem desligar depois nos ajustes continua desligado.
 alter table public.companies alter column auto_dispatch set default true;
+-- Saída vai cheia até o máximo da loja (06/10/2026): desvio 0 = sem limite.
+alter table public.companies alter column auto_max_detour_km set default 0;
 create table if not exists public.schema_flags (name text primary key, applied_at timestamptz not null default now());
 alter table public.schema_flags enable row level security;
 do $$ begin
   if not exists (select 1 from public.schema_flags where name = 'auto_dispatch_on') then
     update public.companies set auto_dispatch = true where not auto_dispatch;
     insert into public.schema_flags (name) values ('auto_dispatch_on');
+  end if;
+  if not exists (select 1 from public.schema_flags where name = 'auto_full_route') then
+    update public.companies set auto_max_detour_km = 0;
+    insert into public.schema_flags (name) values ('auto_full_route');
   end if;
 end $$;
 
@@ -3006,10 +3012,12 @@ returns integer language plpgsql security definer as $$
 declare n integer := 0; r record;
 begin
   for r in select id from public.delivery_runs where courier_id = p_courier and status = 'planned' for update loop
+    -- Cancela antes de soltar os pedidos: o despacho que roda ao soltar não
+    -- pode devolvê-los para esta mesma saída.
+    update public.delivery_runs set status = 'cancelled', finished_at = now() where id = r.id;
     update public.delivery_orders
       set run_id = null, courier_id = null, stop_sequence = null, courier_fee = null
       where run_id = r.id and status in ('received', 'preparing', 'ready');
-    update public.delivery_runs set status = 'cancelled', finished_at = now() where id = r.id;
     n := n + 1;
   end loop;
   return n;
@@ -3017,21 +3025,104 @@ end;
 $$;
 revoke execute on function public.release_planned_runs(uuid) from public, anon, authenticated;
 
+-- Monta/completa uma rota: parte das paradas já escolhidas (p_seed, em
+-- ordem; vazio = começa pelo pedido que espera há mais tempo) e junta os
+-- pedidos livres por inserção mais barata no trajeto loja → paradas → loja,
+-- até o máximo de entregas da loja. Desvio máximo 0 = sem limite.
+-- Devolve a rota inteira na ordem de entrega (ou null se não há pedido).
+create or replace function public.auto_plan_route(p_company uuid, p_seed uuid[])
+returns uuid[] language plpgsql security definer set search_path = public as $$
+declare
+  c record;
+  cid uuid[]; clat double precision[]; clng double precision[];
+  used boolean[];
+  rid uuid[] := '{}'; rlat double precision[] := '{}'; rlng double precision[] := '{}';
+  slat double precision; slng double precision;
+  i int; k int; n int; best_i int; best_k int; best_cost double precision; cost double precision;
+  plat double precision; plng double precision; nlat double precision; nlng double precision;
+  v_oldest uuid;
+begin
+  select * into c from public.companies where id = p_company;
+  slat := c.store_lat; slng := c.store_lng;
+
+  -- Paradas já na rota (saída ainda não confirmada pelo motoboy).
+  if coalesce(array_length(p_seed, 1), 0) > 0 then
+    select array_agg(o.id order by t.ord), array_agg(o.lat order by t.ord), array_agg(o.lng order by t.ord)
+      into rid, rlat, rlng
+      from unnest(p_seed) with ordinality t(id, ord) join public.delivery_orders o on o.id = t.id
+      where o.lat is not null and o.lng is not null;
+    rid := coalesce(rid, '{}'); rlat := coalesce(rlat, '{}'); rlng := coalesce(rlng, '{}');
+  end if;
+
+  -- Pedidos livres, do que espera há mais tempo para o mais novo.
+  select array_agg(o.id order by o.since, o.number), array_agg(o.lat order by o.since, o.number),
+         array_agg(o.lng order by o.since, o.number)
+    into cid, clat, clng
+    from (select x.id, x.number, x.lat, x.lng,
+                 case when c.auto_dispatch_when = 'ready' then coalesce(x.ready_at, x.created_at) else x.created_at end as since
+          from public.delivery_orders x
+          where x.company_id = p_company and x.run_id is null and x.lat is not null and x.lng is not null
+            and x.order_type = 'delivery'
+            and x.status in ('received', 'preparing', 'ready')
+            and (c.auto_dispatch_when = 'any' or x.status = 'ready')) o;
+  if cid is null then
+    return case when array_length(rid, 1) > 0 then rid end;
+  end if;
+  n := array_length(cid, 1);
+  used := array_fill(false, array[n]);
+
+  if coalesce(array_length(rid, 1), 0) = 0 then
+    rid := array[cid[1]]; rlat := array[clat[1]]; rlng := array[clng[1]];
+    used[1] := true;
+  end if;
+  v_oldest := rid[1];
+
+  -- Inserção mais barata até o máximo da loja.
+  while array_length(rid, 1) < c.auto_max_stops loop
+    best_cost := null;
+    for i in 1 .. n loop
+      continue when used[i];
+      for k in 0 .. array_length(rid, 1) loop
+        if k = 0 then plat := coalesce(slat, rlat[1]); plng := coalesce(slng, rlng[1]);
+        else plat := rlat[k]; plng := rlng[k]; end if;
+        if k = array_length(rid, 1) then nlat := coalesce(slat, rlat[1]); nlng := coalesce(slng, rlng[1]);
+        else nlat := rlat[k + 1]; nlng := rlng[k + 1]; end if;
+        cost := public.geo_km(plat, plng, clat[i], clng[i]) + public.geo_km(clat[i], clng[i], nlat, nlng)
+                - public.geo_km(plat, plng, nlat, nlng);
+        if best_cost is null or cost < best_cost - 1e-9 then best_cost := cost; best_i := i; best_k := k; end if;
+      end loop;
+    end loop;
+    -- 1,3 ≈ ruas em vez de linha reta.
+    exit when best_cost is null or (c.auto_max_detour_km > 0 and best_cost * 1.3 > c.auto_max_detour_km);
+    rid := rid[1:best_k] || cid[best_i] || rid[best_k + 1:];
+    rlat := rlat[1:best_k] || clat[best_i] || rlat[best_k + 1:];
+    rlng := rlng[1:best_k] || clng[best_i] || rlng[best_k + 1:];
+    used[best_i] := true;
+  end loop;
+
+  -- Volta fechada: os dois sentidos têm o mesmo trajeto; usa o que entrega
+  -- antes o pedido mais antigo.
+  k := array_position(rid, v_oldest);
+  i := array_length(rid, 1);
+  if k > i + 1 - k or (k = i + 1 - k and slat is not null
+      and public.geo_km(slat, slng, rlat[i], rlng[i]) < public.geo_km(slat, slng, rlat[1], rlng[1])) then
+    select array_agg(rid[j] order by j desc) into rid from generate_subscripts(rid, 1) j;
+  end if;
+  return rid;
+end;
+$$;
+revoke execute on function public.auto_plan_route(uuid, uuid[]) from public, anon, authenticated;
+
 create or replace function public.auto_dispatch(p_company uuid)
 returns integer language plpgsql security definer as $$
 declare
   c record;
   r record;
   v_courier uuid;
-  v_since timestamptz;
-  -- candidatos
-  cid uuid[]; clat double precision[]; clng double precision[]; csince timestamptz[];
-  used boolean[];
-  -- rota (sem a loja)
-  rid uuid[]; rlat double precision[]; rlng double precision[];
-  slat double precision; slng double precision;
-  i int; k int; best_i int; best_k int; best_cost double precision; cost double precision;
-  plat double precision; plng double precision; nlat double precision; nlng double precision;
+  v_oldest timestamptz;
+  v_seed uuid[];
+  rid uuid[];
+  i int;
   v_run uuid;
   v_fee numeric;
   v_count int := 0;
@@ -3060,9 +3151,33 @@ begin
     end loop;
   end if;
 
-  slat := c.store_lat; slng := c.store_lng;
+  -- 2) Saída automática ainda não confirmada pelo motoboy e abaixo do máximo:
+  --    os pedidos que ficaram prontos depois entram nela (rota refeita).
+  for r in select dr.id, dr.courier_id from public.delivery_runs dr
+           where dr.company_id = p_company and dr.auto and dr.status = 'planned'
+             and (select count(*) from public.delivery_orders o where o.run_id = dr.id) between 1 and c.auto_max_stops - 1
+             and exists (select 1 from public.courier_shifts s
+                         where s.courier_id = dr.courier_id and s.ended_at is null and not s.paused)
+           order by dr.created_at loop
+    select array_agg(o.id order by o.stop_sequence) into v_seed
+      from public.delivery_orders o where o.run_id = r.id;
+    rid := public.auto_plan_route(p_company, v_seed);
+    continue when rid is null or array_length(rid, 1) <= coalesce(array_length(v_seed, 1), 0);
+    v_fee := public.courier_order_fee(r.courier_id);
+    for i in 1 .. array_length(rid, 1) loop
+      update public.delivery_orders
+        set run_id = r.id, courier_id = r.courier_id, stop_sequence = i,
+            courier_fee = case when run_id is null then v_fee else courier_fee end
+        where id = rid[i] and (run_id is null or run_id = r.id);
+    end loop;
+    insert into public.notifications (company_id, user_id, type, title, message)
+      values (p_company, r.courier_id, 'new_run', 'Saída atualizada',
+              'Agora são ' || array_length(rid, 1) || ' parada(s). Confira a rota antes de sair.');
+    v_count := v_count + 1;
+  end loop;
 
-  -- 2) Uma saída por motoboy livre, do que espera há mais tempo.
+  -- 3) Uma saída por motoboy livre, na vez de quem está livre há mais tempo,
+  --    com a rota inteira até o máximo da loja.
   loop
     select s.courier_id into v_courier
       from public.courier_shifts s join public.profiles p on p.id = s.courier_id
@@ -3076,57 +3191,17 @@ begin
       limit 1;
     exit when v_courier is null;
 
-    select array_agg(o.id order by o.since, o.number), array_agg(o.lat order by o.since, o.number),
-           array_agg(o.lng order by o.since, o.number), array_agg(o.since order by o.since, o.number)
-      into cid, clat, clng, csince
-      from (select x.id, x.number, x.lat, x.lng,
-                   case when c.auto_dispatch_when = 'ready' then coalesce(x.ready_at, x.created_at) else x.created_at end as since
-            from public.delivery_orders x
-            where x.company_id = p_company and x.run_id is null and x.lat is not null and x.lng is not null
-              and x.order_type = 'delivery'
-              and x.status in ('received', 'preparing', 'ready')
-              and (c.auto_dispatch_when = 'any' or x.status = 'ready')) o;
-    exit when cid is null;
     -- O mais antigo precisa ter esperado o tempo mínimo (para juntar pedidos).
-    exit when csince[1] > now() - make_interval(mins => c.auto_hold_minutes);
+    select min(case when c.auto_dispatch_when = 'ready' then coalesce(x.ready_at, x.created_at) else x.created_at end)
+      into v_oldest
+      from public.delivery_orders x
+      where x.company_id = p_company and x.run_id is null and x.lat is not null and x.lng is not null
+        and x.order_type = 'delivery' and x.status in ('received', 'preparing', 'ready')
+        and (c.auto_dispatch_when = 'any' or x.status = 'ready');
+    exit when v_oldest is null or v_oldest > now() - make_interval(mins => c.auto_hold_minutes);
 
-    used := array_fill(false, array[array_length(cid, 1)]);
-    used[1] := true;
-    rid := array[cid[1]]; rlat := array[clat[1]]; rlng := array[clng[1]];
-
-    -- Inserção mais barata: junta o pedido que menos aumenta o trajeto
-    -- (loja → paradas → loja), enquanto o desvio couber no limite.
-    while array_length(rid, 1) < c.auto_max_stops loop
-      best_cost := null;
-      for i in 1 .. array_length(cid, 1) loop
-        continue when used[i];
-        for k in 0 .. array_length(rid, 1) loop
-          if k = 0 then plat := coalesce(slat, rlat[1]); plng := coalesce(slng, rlng[1]);
-          else plat := rlat[k]; plng := rlng[k]; end if;
-          if k = array_length(rid, 1) then nlat := coalesce(slat, rlat[1]); nlng := coalesce(slng, rlng[1]);
-          else nlat := rlat[k + 1]; nlng := rlng[k + 1]; end if;
-          cost := public.geo_km(plat, plng, clat[i], clng[i]) + public.geo_km(clat[i], clng[i], nlat, nlng)
-                  - public.geo_km(plat, plng, nlat, nlng);
-          if best_cost is null or cost < best_cost - 1e-9 then best_cost := cost; best_i := i; best_k := k; end if;
-        end loop;
-      end loop;
-      -- 1,3 ≈ ruas em vez de linha reta.
-      exit when best_cost is null or best_cost * 1.3 > c.auto_max_detour_km;
-      rid := rid[1:best_k] || cid[best_i] || rid[best_k + 1:];
-      rlat := rlat[1:best_k] || clat[best_i] || rlat[best_k + 1:];
-      rlng := rlng[1:best_k] || clng[best_i] || rlng[best_k + 1:];
-      used[best_i] := true;
-    end loop;
-
-    -- A volta é fechada (loja → ... → loja), então os dois sentidos têm o
-    -- mesmo trajeto: usa o que entrega antes o pedido mais antigo.
-    k := array_position(rid, cid[1]);
-    i := array_length(rid, 1);
-    if k > i + 1 - k or (k = i + 1 - k and slat is not null
-        and public.geo_km(slat, slng, rlat[i], rlng[i]) < public.geo_km(slat, slng, rlat[1], rlng[1])) then
-      select array_agg(rid[j] order by j desc), array_agg(rlat[j] order by j desc), array_agg(rlng[j] order by j desc)
-        into rid, rlat, rlng from generate_subscripts(rid, 1) j;
-    end if;
+    rid := public.auto_plan_route(p_company, '{}');
+    exit when rid is null;
 
     insert into public.delivery_runs (company_id, courier_id, created_by, strict_route, auto)
       values (p_company, v_courier, null, c.strict_route_mode, true) returning id into v_run;
