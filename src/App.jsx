@@ -1,3 +1,4 @@
+import ErrorBoundary from "./components/ErrorBoundary";
 import { lazy, Suspense } from "react";
 import { useLocation } from "react-router-dom";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
@@ -21,6 +22,7 @@ const CourierEarnings = lazy(() => import("./pages/CourierEarnings"));
 const CollaboratorChat = lazy(() => import("./pages/CollaboratorChat"));
 const SupervisorDashboard = lazy(() => import("./pages/SupervisorDashboard"));
 const RatingPage = lazy(() => import("./pages/RatingPage"));
+const KitchenDisplay = lazy(() => import("./pages/KitchenDisplay"));
 
 function RootRoute() {
   const auth = useAuth();
@@ -37,12 +39,15 @@ function AnimatedApp() {
     <AnimatePresence mode="wait">
       <PageTransition routeKey={location.pathname}>
         <Suspense fallback={null}>
+          <ErrorBoundary key={location.pathname}>
           <Routes location={location}>
             <Route path="/" element={<RootRoute />} />
             <Route path="/welcome" element={<Welcome />} />
             <Route path="/login" element={<Login />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/avaliar/:token" element={<RatingPage />} />
+            <Route path="/cozinha" element={<RoleRoute allow={["company_admin", "supervisor"]}><KitchenDisplay /></RoleRoute>} />
+            <Route path="/cozinha/:token" element={<KitchenDisplay />} />
 
             <Route path="/ativar" element={<ProtectedRoute><Activate /></ProtectedRoute>} />
 
@@ -56,6 +61,7 @@ function AnimatedApp() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </ErrorBoundary>
         </Suspense>
       </PageTransition>
     </AnimatePresence>

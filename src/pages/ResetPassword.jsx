@@ -2,17 +2,18 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Box, Button, Container, TextField, Typography, CircularProgress } from "@mui/material";
 import LockResetIcon from "@mui/icons-material/LockReset";
-import supabase from "../services/supabase";
+import supabase, { passwordRecovery } from "../services/supabase";
 
 // Página que recebe o link de "esqueci minha senha" enviado por e-mail.
 // O Supabase, ao abrir esse link, detecta o token na URL e dispara o evento
-// PASSWORD_RECOVERY sozinho (sem precisarmos ler a URL manualmente) — daí só
-// pedimos a nova senha e chamamos updateUser.
+// PASSWORD_RECOVERY sozinho — daí só pedimos a nova senha e chamamos
+// updateUser. Uma sessão comum (sem vir do link) NÃO libera a troca.
 export default function ResetPassword() {
   const navigate = useNavigate();
 
   const [ready, setReady] = useState(false);
   const [linkInvalid, setLinkInvalid] = useState(false);
+  const [notFromLink, setNotFromLink] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
@@ -33,18 +34,22 @@ export default function ResetPassword() {
       }
     });
 
-    // Caso o evento já tenha disparado antes deste componente montar (ou a
-    // pessoa já tenha uma sessão de recuperação válida de um reload), também
-    // aceitamos se já existir uma sessão ativa.
+    // O evento pode ter disparado antes deste componente montar (guardado em
+    // passwordRecovery). Só aceitamos a sessão se ela veio do link de
+    // recuperação (evento ou type=recovery na URL).
     supabase.auth.getSession().then(({ data }) => {
       if (cancelled) return;
-      if (data?.session) { becameReady.current = true; setReady(true); }
+      if (data?.session && (passwordRecovery.event || passwordRecovery.fromUrl)) {
+        becameReady.current = true; setReady(true);
+      }
     });
 
     // Dá um tempo curto pro evento PASSWORD_RECOVERY chegar antes de
     // considerar o link inválido/expirado.
     const timer = setTimeout(() => {
-      if (!cancelled && !becameReady.current) setLinkInvalid(true);
+      if (cancelled || becameReady.current) return;
+      if (passwordRecovery.event || passwordRecovery.fromUrl) setLinkInvalid(true);
+      else setNotFromLink(true);
     }, 4000);
 
     return () => { cancelled = true; clearTimeout(timer); listener?.subscription?.unsubscribe(); };
@@ -83,7 +88,20 @@ export default function ResetPassword() {
             Nova senha
           </Typography>
 
-          {linkInvalid && !ready ? (
+          {notFromLink && !ready ? (
+            <>
+              <Typography sx={{ fontSize: 13, color: "#78716C", textAlign: "center", mb: 3 }}>
+                Abra o link enviado para o seu e-mail para trocar a senha.
+              </Typography>
+              <Button
+                fullWidth onClick={() => navigate("/login")}
+                variant="contained"
+                sx={{ borderRadius: "12px", py: 1.3, fontWeight: 700, textTransform: "none" }}
+              >
+                Voltar para o login
+              </Button>
+            </>
+          ) : linkInvalid && !ready ? (
             <>
               <Typography sx={{ fontSize: 13, color: "#78716C", textAlign: "center", mb: 3 }}>
                 Este link de recuperação é inválido ou já expirou. Solicite um novo na tela de login.

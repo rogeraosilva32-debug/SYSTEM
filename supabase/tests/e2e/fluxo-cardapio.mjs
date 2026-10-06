@@ -10,6 +10,7 @@ const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q
 const APP = 'http://localhost:4173';
 const log = (...a) => console.log('•', ...a);
 const errors = [];
+const cont = (p) => p.getByRole('button', { name: 'Continuar' }).click();
 const check = (label, ok) => { console.log(ok ? '✓' : '✗', label); if (!ok) errors.push(`falhou: ${label}`); };
 
 const A = 'aaaaaaaa-0000-0000-0000-000000000000';
@@ -74,10 +75,12 @@ check('admin altera o preço da opção', sql(`select variants->1->>'price' from
 await page.getByText('Pedidos', { exact: true }).click();
 await page.getByRole('button', { name: 'Novo pedido' }).click();
 await page.getByLabel('Nome do cliente').fill('Rita Cardápio');
+await cont(page);
 await page.getByLabel('Rua').fill('Rua Direita');
 await page.getByLabel('Número').fill('100');
 await page.getByLabel('Bairro').fill('Centro');
 await page.getByLabel('Cidade').fill('São Paulo');
+await cont(page);
 check('não há campo de valor digitado', (await page.getByLabel('Valor dos itens').count()) === 0);
 await page.getByLabel('Adicionar produto do cardápio').fill('tudo');
 await page.getByRole('option', { name: /X-Tudo/ }).click();
@@ -90,6 +93,7 @@ await page.getByRole('button', { name: 'Adicionar R$ 70,00' }).click();
 await page.getByLabel('Adicionar produto do cardápio').fill('Misto');
 await page.getByRole('option', { name: /Misto quente/ }).click();
 await page.getByRole('button', { name: /^Adicionar R\$ 19,00$/ }).click();
+await cont(page);
 await page.getByText('Total agora').waitFor();
 await page.screenshot({ path: `${SHOTS}/42-pedido-produtos.png`, fullPage: true });
 check('resumo soma produtos + taxa do bairro', await page.getByText('R$ 94,00').isVisible());

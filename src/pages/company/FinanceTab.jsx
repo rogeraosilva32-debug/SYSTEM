@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Box, Typography, Button, TextField, CircularProgress, Alert, Chip, Checkbox, MenuItem, IconButton,
   Table, TableHead, TableRow, TableCell, TableBody,
@@ -6,7 +6,7 @@ import {
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
-import { money, PAYMENT_LABEL } from "../../utils/delivery";
+import { money, PAYMENT_LABEL, parsePrice } from "../../utils/delivery";
 import { today, periodRange, formatDate, km, downloadCsv, CASH_KIND, loadError } from "../../utils/reports";
 import { Stat, StatGrid, Section, BarList } from "../../components/ReportParts";
 
@@ -16,7 +16,8 @@ const SUBTABS = [
   { key: "rates", label: "Valores do motoboy" },
 ];
 
-const num = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
+// Valor digitado ("1.234,50", "-10", "−10") → número; vazio = 0; inválido = null.
+const num = (v) => (String(v ?? "").trim() === "" ? 0 : parsePrice(String(v).replace(/\u2212/g, "-")));
 const time = (iso) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 
 function useCouriers(companyId) {
@@ -40,36 +41,51 @@ function CashDay({ companyId }) {
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const req = useRef(0);
 
   const load = useCallback(async () => {
+    const my = ++req.current;
     const { data: d, error: err } = await supabase.rpc("report_cash_day", { p_day: day });
-    if (err) { setError(loadError(err)); return; }
+    if (my !== req.current) return; // trocou o dia antes de responder
+    if (err) { setError(loadError(err)); setData(null); return; }
     setData(d);
     setSelected([]);
   }, [day]);
 
+  // Evita clique duplo (lançamento em dobro) e spinner preso em falha de rede.
+  const guarded = async (fn) => {
+    if (busy) return;
+    setBusy(true); setError("");
+    try { await fn(); } catch (e) { setError(loadError(e)); } finally { setBusy(false); }
+  };
+
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
-  const addMovement = async () => {
-    setError("");
-    if (num(amount) <= 0) { setError("Informe um valor."); return; }
-    const { error: err } = await supabase.from("cash_movements").insert({ company_id: companyId, kind, amount: num(amount), note: note.trim() || null });
+  const addMovement = () => guarded(async () => {
+    const value = num(amount);
+    if (!value || value <= 0) { setError("Informe um valor válido, ex.: 50,00."); return; }
+    const { error: err } = await supabase.from("cash_movements").insert({ company_id: companyId, kind, amount: value, note: note.trim() || null });
     if (err) { setError(loadError(err)); return; }
     setAmount(""); setNote("");
     load();
+  });
+
+  const removeMovement = (m) => {
+    if (!window.confirm(`Excluir o movimento "${CASH_KIND[m.kind]?.label || m.kind}" de ${money(m.amount)}?`)) return;
+    guarded(async () => {
+      const { error: err } = await supabase.from("cash_movements").delete().eq("id", m.id);
+      if (err) { setError(loadError(err)); return; }
+      load();
+    });
   };
 
-  const removeMovement = async (id) => {
-    await supabase.from("cash_movements").delete().eq("id", id);
-    load();
-  };
-
-  const confirm = async (ids, received = true) => {
+  const confirm = (ids, received = true) => guarded(async () => {
     const { error: err } = await supabase.rpc("confirm_payments", { p_order_ids: ids, p_received: received });
     if (err) { setError(loadError(err)); return; }
     load();
-  };
+  });
 
   if (!data) return <Box sx={{ py: 8, textAlign: "center" }}>{error ? <Alert severity="error">{error}</Alert> : <CircularProgress size={26} />}</Box>;
 
@@ -108,7 +124,7 @@ function CashDay({ companyId }) {
               </TextField>
               <TextField size="small" label="Valor (R$)" value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
               <TextField size="small" label="Observação" value={note} onChange={(e) => setNote(e.target.value)} />
-              <Button variant="contained" onClick={addMovement}>Lançar</Button>
+              <Button variant="contained" onClick={addMovement} disabled={busy}>Lançar</Button>
             </Box>
           )}
           {data.movements.length === 0 && <Typography sx={{ fontSize: 13, color: "#A8A29E" }}>Nenhum movimento.</Typography>}
@@ -116,12 +132,12 @@ function CashDay({ companyId }) {
             <Box key={m.id} sx={{ display: "flex", alignItems: "center", gap: 1, py: 0.6, borderTop: "1px solid #F5F5F4" }}>
               <Typography sx={{ fontSize: 12, color: "#A8A29E", width: 44 }}>{time(m.created_at)}</Typography>
               <Typography sx={{ flex: 1, fontSize: 13 }}>
-                <b>{CASH_KIND[m.kind].label}</b>{m.note ? ` · ${m.note}` : ""}
+                <b>{CASH_KIND[m.kind]?.label || m.kind}</b>{m.note ? ` · ${m.note}` : ""}
               </Typography>
               <Typography sx={{ fontSize: 13, fontWeight: 700, color: CASH_KIND[m.kind].sign < 0 ? "#B0463D" : "#4B7A5E" }}>
                 {CASH_KIND[m.kind].sign < 0 ? "−" : "+"} {money(m.amount)}
               </Typography>
-              {isToday && <IconButton size="small" onClick={() => removeMovement(m.id)}><DeleteOutlineIcon fontSize="small" /></IconButton>}
+              {isToday && <IconButton size="small" aria-label="Excluir movimento" disabled={busy} onClick={() => removeMovement(m)}><DeleteOutlineIcon fontSize="small" /></IconButton>}
             </Box>
           ))}
         </Section>
@@ -130,7 +146,7 @@ function CashDay({ companyId }) {
       <Section
         title="Conferência do dinheiro dos motoboys"
         actions={selected.length > 0 && (
-          <Button size="small" variant="contained" onClick={() => confirm(selected)}>Conferir {selected.length} selecionado(s)</Button>
+          <Button size="small" variant="contained" disabled={busy} onClick={() => confirm(selected)}>Conferir {selected.length} selecionado(s)</Button>
         )}
         onExport={() => downloadCsv(`dinheiro_${day}.csv`, [
           { label: "Pedido", value: (o) => o.number }, { label: "Cliente", value: (o) => o.customer_name },
@@ -167,7 +183,7 @@ function CashDay({ companyId }) {
                       )}
                     </TableCell>
                     <TableCell>#{o.number} · {o.customer_name}</TableCell>
-                    <TableCell>{o.courier || "—"}</TableCell>
+                    <TableCell>{o.courier || "Balcão"}</TableCell>
                     <TableCell>{time(o.delivered_at)}</TableCell>
                     <TableCell align="right">{money(o.total)}</TableCell>
                     <TableCell align="right">{o.change_for ? `${money(o.change_for)} (troco ${money(o.change_for - o.total)})` : "—"}</TableCell>
@@ -200,12 +216,20 @@ function Settlements({ companyId }) {
   const [list, setList] = useState(null);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from("settlements").select("*, courier:courier_id(name)")
+    const { data, error: err } = await supabase.from("settlements").select("*, courier:courier_id(name)")
       .eq("company_id", companyId).order("period_end", { ascending: false }).limit(100);
+    if (err) setError(loadError(err));
     setList(data || []);
   }, [companyId]);
+
+  const guarded = async (fn) => {
+    if (busy) return;
+    setBusy(true); setError("");
+    try { await fn(); } catch (e) { setError(loadError(e)); } finally { setBusy(false); }
+  };
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
@@ -218,22 +242,28 @@ function Settlements({ companyId }) {
     setPreview(data);
   };
 
-  const create = async () => {
-    setError("");
+  const create = () => guarded(async () => {
+    const adj = num(adjustment);
+    if (adj == null) { setError("Ajuste inválido. Use só números, ex.: -10,00 ou 25,50."); return; }
     const { error: err } = await supabase.rpc("create_settlement", {
-      p_courier: courier, p_from: range[0], p_to: range[1], p_adjustment: num(adjustment), p_note: note,
+      p_courier: courier, p_from: range[0], p_to: range[1], p_adjustment: adj, p_note: note,
     });
     if (err) { setError(loadError(err)); return; }
     setPreview(null); setAdjustment(""); setNote("");
     setSaved("Acerto gravado."); setTimeout(() => setSaved(""), 2500);
     load();
-  };
+  });
 
-  const act = async (fn, id) => {
-    setError("");
-    const { error: err } = await supabase.rpc(fn, { p_id: id });
-    if (err) { setError(loadError(err)); return; }
-    load();
+  const act = (fn, s) => {
+    const text = fn === "pay_settlement"
+      ? `Marcar como pago o acerto de ${s.courier?.name || "motoboy"} (${money(s.total)})?`
+      : `Excluir o acerto de ${s.courier?.name || "motoboy"} (${money(s.total)})?`;
+    if (!window.confirm(text)) return;
+    guarded(async () => {
+      const { error: err } = await supabase.rpc(fn, { p_id: s.id });
+      if (err) { setError(loadError(err)); return; }
+      load();
+    });
   };
 
   return (
@@ -262,7 +292,9 @@ function Settlements({ companyId }) {
             <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 2fr auto" }, gap: 1, alignItems: "center" }}>
               <TextField size="small" label="Ajuste (R$, use − para desconto)" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} />
               <TextField size="small" label="Motivo do ajuste" value={note} onChange={(e) => setNote(e.target.value)} />
-              <Button variant="contained" onClick={create}>Gravar acerto de {money(Number(preview.total) + num(adjustment))}</Button>
+              <Button variant="contained" onClick={create} disabled={busy || num(adjustment) == null}>
+                {num(adjustment) == null ? "Ajuste inválido" : `Gravar acerto de ${money(Number(preview.total) + num(adjustment))}`}
+              </Button>
             </Box>
             <Typography sx={{ fontSize: 12.5, color: "#78716C", mt: 1 }}>
               Dinheiro de clientes recebido por ele no período: <b>{money(preview.cash_collected)}</b> (confira no Caixa do dia).
@@ -309,8 +341,8 @@ function Settlements({ companyId }) {
                     <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                       {s.status === "open" && (
                         <>
-                          <Button size="small" onClick={() => act("pay_settlement", s.id)}>Marcar pago</Button>
-                          <IconButton size="small" onClick={() => act("delete_settlement", s.id)}><DeleteOutlineIcon fontSize="small" /></IconButton>
+                          <Button size="small" disabled={busy} onClick={() => act("pay_settlement", s)}>Marcar pago</Button>
+                          <IconButton size="small" aria-label="Excluir acerto" disabled={busy} onClick={() => act("delete_settlement", s)}><DeleteOutlineIcon fontSize="small" /></IconButton>
                         </>
                       )}
                     </TableCell>
@@ -352,9 +384,14 @@ function Rates({ companyId }) {
   useEffect(() => { load(); }, [load]);
 
   const saveDefaults = async () => {
-    const { error } = await supabase.from("companies").update({
+    const values = {
       courier_daily_rate: num(form.courier_daily_rate), courier_per_delivery: num(form.courier_per_delivery), courier_per_km: num(form.courier_per_km),
-    }).eq("id", companyId);
+    };
+    if (Object.values(values).some((v) => v == null || v < 0)) {
+      setMsg({ type: "error", text: "Valor inválido. Use só números, ex.: 5,00 (0 no que não paga)." });
+      return;
+    }
+    const { error } = await supabase.from("companies").update(values).eq("id", companyId);
     setMsg(error ? { type: "error", text: loadError(error) } : { type: "success", text: "Valores padrão salvos." });
     load();
   };
@@ -372,6 +409,7 @@ function Rates({ companyId }) {
 
   const field = (value) => (value === null || value === undefined ? "" : String(value));
   const parseOrNull = (v) => (String(v).trim() === "" ? null : num(v));
+  const isInvalid = (v) => String(v).trim() !== "" && (num(v) == null || num(v) < 0);
 
   return (
     <Box sx={{ maxWidth: 860 }}>
@@ -400,7 +438,11 @@ function Rates({ companyId }) {
                 <TextField key={k} size="small" label={label} defaultValue={field(r[k])}
                   placeholder={money(company[{ daily_rate: "courier_daily_rate", per_delivery: "courier_per_delivery", per_km: "courier_per_km" }[k]])}
                   InputLabelProps={{ shrink: true }}
-                  onBlur={(e) => { const v = parseOrNull(e.target.value); if (v !== (r[k] == null ? null : Number(r[k]))) saveCourier(c.id, { [k]: v }); }} />
+                  onBlur={(e) => {
+                    if (isInvalid(e.target.value)) { setMsg({ type: "error", text: `${label} de ${c.name}: valor inválido, não foi salvo.` }); return; }
+                    const v = parseOrNull(e.target.value);
+                    if (v !== (r[k] == null ? null : Number(r[k]))) saveCourier(c.id, { [k]: v });
+                  }} />
               ))}
             </Box>
           );

@@ -150,3 +150,11 @@ create table if not exists public.push_subscriptions (
   created_at timestamptz not null default now()
 );
 alter table public.profiles add constraint profiles_company_fk foreign key (company_id) references public.companies(id);
+
+-- Função antiga em public com outro dono (como as criadas pelo painel do
+-- Supabase): o schema não pode quebrar ao revisar permissões/search_path.
+do $$ begin
+  if not exists (select 1 from pg_roles where rolname = 'supabase_admin') then create role supabase_admin nologin; end if;
+end $$;
+create or replace function public.funcao_legada() returns int language sql security definer as 'select 1';
+alter function public.funcao_legada() owner to supabase_admin;

@@ -16,15 +16,20 @@ export default function CourierEarnings() {
   const [preview, setPreview] = useState(null);
   const [list, setList] = useState(null);
   const [error, setError] = useState("");
+  const [listError, setListError] = useState("");
 
   useEffect(() => {
+    let alive = true; // período trocado antes de responder: ignora a resposta antiga
     supabase.rpc("preview_settlement", { p_courier: profile.id, p_from: range[0], p_to: range[1] })
-      .then(({ data, error: err }) => { setError(err ? loadError(err) : ""); setPreview(data); });
+      .then(({ data, error: err }) => { if (!alive) return; setError(err ? loadError(err) : ""); setPreview(err ? null : data); },
+        (e) => { if (alive) setError(loadError(e)); });
+    return () => { alive = false; };
   }, [profile.id, range]);
 
   useEffect(() => {
     supabase.from("settlements").select("*").eq("courier_id", profile.id).order("period_end", { ascending: false }).limit(50)
-      .then(({ data, error: err }) => { if (err) setError(loadError(err)); setList(data || []); });
+      .then(({ data, error: err }) => { setListError(err ? loadError(err) : ""); setList(data || []); },
+        (e) => { setListError(loadError(e)); setList([]); });
   }, [profile.id]);
 
   return (
@@ -32,6 +37,7 @@ export default function CourierEarnings() {
       <CollaboratorNav />
       <PeriodPicker value={range} onChange={setRange} />
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {listError && <Alert severity="error" sx={{ mb: 2 }}>{listError}</Alert>}
       {error ? null : !preview ? <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box> : (
         <>
           <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, 1fr)" }, gap: 1.5, mb: 1 }}>

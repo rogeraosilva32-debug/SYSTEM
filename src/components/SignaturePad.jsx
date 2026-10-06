@@ -4,7 +4,7 @@ import { Box, Button, Typography } from "@mui/material";
 // Assinatura simples por toque/mouse num canvas — usada pra confirmação do
 // cliente no fechamento do atendimento. Sem biblioteca externa: é só
 // desenho livre num <canvas>, exportado como PNG (data URL) no fim.
-export default function SignaturePad({ onConfirm, onSkip }) {
+export default function SignaturePad({ onConfirm, onSkip, disabled = false }) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
   const [hasDrawn, setHasDrawn] = useState(false);
@@ -78,9 +78,9 @@ export default function SignaturePad({ onConfirm, onSkip }) {
         />
       </Box>
       <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
-        <Button size="small" onClick={clear} sx={{ color: "#78716C", textTransform: "none" }}>Limpar</Button>
-        <Button size="small" onClick={onSkip} sx={{ color: "#78716C", textTransform: "none", ml: "auto" }}>Pular</Button>
-        <Button size="small" variant="contained" onClick={confirm} disabled={!hasDrawn} sx={{ textTransform: "none", fontWeight: 700 }}>
+        <Button size="small" onClick={clear} disabled={disabled} sx={{ color: "#78716C", textTransform: "none" }}>Limpar</Button>
+        <Button size="small" onClick={onSkip} disabled={disabled} sx={{ color: "#78716C", textTransform: "none", ml: "auto" }}>Pular</Button>
+        <Button size="small" variant="contained" onClick={confirm} disabled={!hasDrawn || disabled} sx={{ textTransform: "none", fontWeight: 700 }}>
           Confirmar
         </Button>
       </Box>

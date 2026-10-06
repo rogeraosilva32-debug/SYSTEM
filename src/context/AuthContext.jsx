@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import supabase from "../services/supabase";
 import { clearCompanySettings } from "../hooks/useCompanySettings";
 
@@ -6,6 +6,7 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
+  const lastUserId = useRef(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -84,6 +85,7 @@ export function AuthProvider({ children }) {
         const authUser = data?.session?.user || null;
         if (cancelled) return;
         setUser(authUser);
+        lastUserId.current = authUser?.id || null;
         const ok = await loadProfile(authUser);
         // Se a primeira tentativa falhou (ex: cache de schema do PostgREST
         // ainda se ajustando logo após uma alteração de tabela), tenta de
@@ -106,17 +108,25 @@ export function AuthProvider({ children }) {
     init();
 
     const { data: listener } =
-      supabase.auth.onAuthStateChange(async (_event, session) => {
+      supabase.auth.onAuthStateChange((_event, session) => {
         const authUser = session?.user || null;
         setUser(authUser);
-        try {
-          const ok = await loadProfile(authUser);
-          if (!ok && authUser && !cancelled) {
-            setTimeout(() => { if (!cancelled) loadProfile(authUser); }, 2500);
+        // Saiu (ou outra pessoa entrou nesta aba): esquece os ajustes da empresa anterior.
+        if (!authUser || authUser.id !== lastUserId.current) clearCompanySettings();
+        lastUserId.current = authUser?.id || null;
+        // Consultas ao supabase DENTRO deste callback podem travar o login
+        // (trava interna do supabase-js); por isso rodam logo depois.
+        setTimeout(async () => {
+          if (cancelled) return;
+          try {
+            const ok = await loadProfile(authUser);
+            if (!ok && authUser && !cancelled) {
+              setTimeout(() => { if (!cancelled) loadProfile(authUser); }, 2500);
+            }
+          } catch (err) {
+            console.warn("Falha ao carregar perfil após mudança de sessão:", err?.message || err);
           }
-        } catch (err) {
-          console.warn("Falha ao carregar perfil após mudança de sessão:", err?.message || err);
-        }
+        }, 0);
       });
 
     return () => {

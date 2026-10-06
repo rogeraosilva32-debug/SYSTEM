@@ -37,9 +37,12 @@ async function importKey(rawKeyBytes) {
 // pessoas tentarem criar ao mesmo tempo, o "ignoreDuplicates" garante que só
 // a primeira vale — por isso relemos depois de tentar criar, pra garantir
 // que todo mundo acaba usando a mesma chave.
+// Qualquer falha ao ler a chave LANÇA erro: usar uma chave gerada só neste
+// navegador cifraria mensagens que ninguém mais conseguiria ler.
 export async function getOrCreateRoomKey(collaboratorId, companyId) {
-  const { data: existing } = await supabase
+  const { data: existing, error: readError } = await supabase
     .from("chat_keys").select("key_b64").eq("collaborator_id", collaboratorId).maybeSingle();
+  if (readError) throw new Error("Não foi possível abrir a conversa: " + readError.message);
   if (existing?.key_b64) return existing.key_b64;
 
   const rawKey = crypto.getRandomValues(new Uint8Array(32));
@@ -50,9 +53,12 @@ export async function getOrCreateRoomKey(collaboratorId, companyId) {
     { onConflict: "collaborator_id", ignoreDuplicates: true }
   );
 
-  const { data: finalRow } = await supabase
+  const { data: finalRow, error: rereadError } = await supabase
     .from("chat_keys").select("key_b64").eq("collaborator_id", collaboratorId).maybeSingle();
-  return finalRow?.key_b64 || key_b64;
+  if (rereadError || !finalRow?.key_b64) {
+    throw new Error("Não foi possível abrir a conversa" + (rereadError ? ": " + rereadError.message : "."));
+  }
+  return finalRow.key_b64;
 }
 
 export async function encryptMessage(plaintext, key_b64) {

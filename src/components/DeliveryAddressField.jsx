@@ -29,7 +29,7 @@ const PRECISION = {
 function Recenter({ point }) {
   const map = useMap();
   useEffect(() => {
-    if (point) map.setView(point, Math.max(map.getZoom(), 16));
+    if (point) map.setView(point, Math.max(map.getZoom(), 16), { animate: false });
     const t = setTimeout(() => map.invalidateSize(), 250);
     return () => clearTimeout(t);
   }, [map, point]);
@@ -58,6 +58,10 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
   const [cepBusy, setCepBusy] = useState(false);
   const near = store?.lat ? { lat: store.lat, lng: store.lng } : null;
   const lastAuto = useRef("");
+  // Valor mais recente: buscas demoram, e o que foi digitado enquanto isso não pode ser desfeito.
+  const latest = useRef(value);
+  useEffect(() => { latest.current = value; }, [value]);
+  const textKey = (v) => [v.street, v.number, v.neighborhood, v.city].join("|");
 
   const set = (patch) => onChange({ ...value, ...patch });
   const setText = (patch) => onChange({ ...value, ...patch, lat: null, lng: null, precision: null });
@@ -88,14 +92,17 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
   const locate = async (auto = false) => {
     if (!value.street && !value.neighborhood) { if (!auto) setError("Digite ao menos a rua ou o bairro."); return; }
     setLocating(true); setError("");
+    const startKey = textKey(value);
     try {
       const r = await locateAddress({ ...value, city: value.city || store?.city, state: value.state || store?.state }, near);
+      const cur = latest.current;
+      if (textKey(cur) !== startKey) return; // endereço mudou durante a busca: vale o novo
       if (!r) { setError("Não achei esse endereço no mapa. Confira a rua e a cidade, ou clique no mapa no ponto da entrega."); return; }
       onChange({
-        ...value,
-        neighborhood: value.neighborhood || r.neighborhood,
-        city: value.city || r.city,
-        state: value.state || r.state,
+        ...cur,
+        neighborhood: cur.neighborhood || r.neighborhood,
+        city: cur.city || r.city,
+        state: cur.state || r.state,
         lat: r.lat, lng: r.lng, precision: r.precision,
       });
     } catch (e) {
@@ -133,7 +140,7 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
       setLocating(true);
       try {
         const r = await locateAddress(next, near);
-        if (r && r.precision === "number") onChange({ ...next, lat: r.lat, lng: r.lng, precision: r.precision });
+        if (r && r.precision === "number" && textKey(latest.current) === textKey(next)) onChange({ ...latest.current, lat: r.lat, lng: r.lng, precision: r.precision });
       } catch { /* fica com o ponto da sugestão */ } finally { setLocating(false); }
       return;
     }
@@ -149,7 +156,8 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
     try {
       const r = await lookupCep(masked);
       if (!r) { setError("CEP não encontrado."); return; }
-      onChange({ ...value, street: r.street || value.street, neighborhood: r.neighborhood || value.neighborhood,
+      const cur = latest.current;
+      onChange({ ...cur, street: r.street || cur.street, neighborhood: r.neighborhood || cur.neighborhood,
         city: r.city, state: r.state, lat: null, lng: null, precision: null });
     } catch {
       setError("Não consegui consultar o CEP agora. Preencha os campos.");

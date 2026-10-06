@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Box, Typography, Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
   Table, TableHead, TableRow, TableCell, TableBody, Chip, IconButton, CircularProgress,
-  Tooltip, Switch, FormControlLabel,
+  Tooltip, Switch, FormControlLabel, Alert,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -82,6 +82,9 @@ function CompanyDetail({ company, onBack, onUpdated }) {
   const [seatsInput, setSeatsInput] = useState(company.seats_limit);
   const [savingSeats, setSavingSeats] = useState(false);
   const [detail, setDetail] = useState(null);
+  // Qual ação está rodando (desabilita os botões) e erro da última ação.
+  const [busy, setBusy] = useState(null);
+  const [actionError, setActionError] = useState("");
 
   const load = useCallback(async () => {
     const [c, s, a] = await Promise.all([
@@ -97,28 +100,41 @@ function CompanyDetail({ company, onBack, onUpdated }) {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
-  const toggleStatus = async () => {
+  // Atualiza a empresa mostrando o erro (se houver) e bloqueando cliques repetidos.
+  const updateCompany = async (action, patch) => {
+    if (busy) return;
+    setBusy(action);
+    setActionError("");
+    try {
+      const { data, error } = await supabase.from("companies").update(patch).eq("id", company.id).select("*").single();
+      if (error) setActionError(error.message);
+      else onUpdated(data);
+    } catch (err) {
+      setActionError(err?.message || "Falha ao salvar.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleStatus = () => {
     const nextStatus = company.status === "active" ? "suspended" : "active";
-    const { data, error } = await supabase.from("companies").update({ status: nextStatus }).eq("id", company.id).select("*").single();
-    if (!error) onUpdated(data);
+    return updateCompany("status", { status: nextStatus });
   };
 
   const saveSeats = async () => {
     setSavingSeats(true);
-    const { data, error } = await supabase.from("companies").update({ seats_limit: Number(seatsInput) || 1 }).eq("id", company.id).select("*").single();
+    await updateCompany("seats", { seats_limit: Number(seatsInput) || 1 });
     setSavingSeats(false);
-    if (!error) onUpdated(data);
   };
 
   // Recursos que só a plataforma libera, por empresa.
-  const toggleFeature = async (column, value) => {
-    const { data, error } = await supabase.from("companies").update({ [column]: value }).eq("id", company.id).select("*").single();
-    if (!error) onUpdated(data);
-  };
+  const toggleFeature = (column, value) => updateCompany(column, { [column]: value });
 
-  const regenerateInvite = async () => {
-    const { data, error } = await supabase.from("companies").update({ collaborator_invite_code: generateCode() }).eq("id", company.id).select("*").single();
-    if (!error) onUpdated(data);
+  const regenerateInvite = () => updateCompany("invite", { collaborator_invite_code: generateCode() });
+
+  const regenerateLicenseKey = () => {
+    if (!window.confirm("Trocar a chave de licença desta empresa? A chave atual deixa de funcionar.")) return;
+    return updateCompany("license", { license_key: generateCode() });
   };
 
   return (
@@ -140,10 +156,12 @@ function CompanyDetail({ company, onBack, onUpdated }) {
           />
         </Box>
         <FormControlLabel
-          control={<Switch checked={company.status === "active"} onChange={toggleStatus} />}
+          control={<Switch checked={company.status === "active"} onChange={toggleStatus} disabled={!!busy} />}
           label={<Typography sx={{ fontSize: 13, fontWeight: 600, color: "#57534E" }}>Empresa ativa</Typography>}
         />
       </Box>
+
+      {actionError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError("")}>{actionError}</Alert>}
 
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 2, mb: 3 }}>
         <Box sx={{ border: "1px solid #E7E5E4", borderRadius: "14px", p: 2.5, background: "#fff" }}>
@@ -152,6 +170,13 @@ function CompanyDetail({ company, onBack, onUpdated }) {
             <Typography sx={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700 }}>{company.license_key}</Typography>
             <Tooltip title="Copiar">
               <IconButton size="small" onClick={() => copyToClipboard(company.license_key)}><ContentCopyIcon sx={{ fontSize: 15 }} /></IconButton>
+            </Tooltip>
+            <Tooltip title="Trocar chave de licença">
+              <span>
+                <IconButton size="small" onClick={regenerateLicenseKey} disabled={!!busy}>
+                  {busy === "license" ? <CircularProgress size={14} /> : <RefreshIcon sx={{ fontSize: 15 }} />}
+                </IconButton>
+              </span>
             </Tooltip>
           </Box>
         </Box>
@@ -163,7 +188,11 @@ function CompanyDetail({ company, onBack, onUpdated }) {
               <IconButton size="small" onClick={() => copyToClipboard(company.collaborator_invite_code)}><ContentCopyIcon sx={{ fontSize: 15 }} /></IconButton>
             </Tooltip>
             <Tooltip title="Gerar novo código">
-              <IconButton size="small" onClick={regenerateInvite}><RefreshIcon sx={{ fontSize: 15 }} /></IconButton>
+              <span>
+                <IconButton size="small" onClick={regenerateInvite} disabled={!!busy}>
+                  {busy === "invite" ? <CircularProgress size={14} /> : <RefreshIcon sx={{ fontSize: 15 }} />}
+                </IconButton>
+              </span>
             </Tooltip>
           </Box>
         </Box>
@@ -180,7 +209,7 @@ function CompanyDetail({ company, onBack, onUpdated }) {
               <Typography sx={{ fontWeight: 700, fontSize: 14 }}>{f.label}</Typography>
               <Typography sx={{ fontSize: 12.5, color: "#78716C" }}>{f.help}</Typography>
             </Box>
-            <Switch checked={Boolean(company[f.column])} onChange={(e) => toggleFeature(f.column, e.target.checked)} />
+            <Switch checked={Boolean(company[f.column])} onChange={(e) => toggleFeature(f.column, e.target.checked)} disabled={!!busy} />
           </Box>
         ))}
       </Box>
@@ -193,7 +222,7 @@ function CompanyDetail({ company, onBack, onUpdated }) {
           value={seatsInput} onChange={(e) => setSeatsInput(e.target.value)}
           sx={{ width: 200 }}
         />
-        <Button onClick={saveSeats} disabled={savingSeats} variant="outlined" sx={{ height: 40 }}>
+        <Button onClick={saveSeats} disabled={savingSeats || !!busy} variant="outlined" sx={{ height: 40 }}>
           {savingSeats ? <CircularProgress size={16} /> : "Salvar"}
         </Button>
         <Typography sx={{ fontSize: 12.5, color: "#78716C", ml: 1 }}>

@@ -22,6 +22,8 @@ function ApiKeysSection() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [label, setLabel] = useState("");
   const [newKeyValue, setNewKeyValue] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [keyError, setKeyError] = useState("");
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("api_keys").select("*").eq("company_id", companyId).order("created_at", { ascending: false });
@@ -32,18 +34,28 @@ function ApiKeysSection() {
   useEffect(() => { load(); }, [load]);
 
   const createKey = async () => {
-    const key = `sa_${generateCode(4, 6).replace(/-/g, "").toLowerCase()}`;
-    const { data, error } = await supabase.from("api_keys").insert({ company_id: companyId, key, label: label.trim() || null }).select("*").single();
-    if (!error) {
-      setKeys((prev) => [data, ...prev]);
+    if (creating) return;
+    setCreating(true);
+    setKeyError("");
+    try {
+      const key = `sa_${generateCode(4, 6).replace(/-/g, "").toLowerCase()}`;
+      const { data, error } = await supabase.from("api_keys").insert({ company_id: companyId, key, label: label.trim() || null }).select("*").single();
+      if (error) { setKeyError("Não foi possível gerar a chave: " + error.message); return; }
+      setKeys((prev) => [data, ...(prev || [])]);
       setNewKeyValue(key);
       setLabel("");
+    } catch (err) {
+      setKeyError("Não foi possível gerar a chave: " + (err?.message || err));
+    } finally {
+      setCreating(false);
     }
   };
 
   const revokeKey = async (id) => {
     if (!window.confirm("Revogar esta chave? Qualquer sistema usando ela para de funcionar imediatamente.")) return;
-    const { data } = await supabase.from("api_keys").update({ revoked: true }).eq("id", id).select("*").single();
+    setKeyError("");
+    const { data, error } = await supabase.from("api_keys").update({ revoked: true }).eq("id", id).select("*").single();
+    if (error) { setKeyError("Não foi possível revogar a chave: " + error.message); return; }
     if (data) setKeys((prev) => prev.map((k) => (k.id === id ? data : k)));
   };
 
@@ -57,10 +69,12 @@ function ApiKeysSection() {
 
       <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
         <TextField size="small" placeholder="Rótulo (ex: Integração financeira)" value={label} onChange={(e) => setLabel(e.target.value)} fullWidth />
-        <Button startIcon={<AddIcon />} variant="outlined" onClick={() => setDialogOpen(true)} sx={{ flexShrink: 0 }}>
+        <Button startIcon={<AddIcon />} variant="outlined" onClick={() => { setKeyError(""); setDialogOpen(true); }} sx={{ flexShrink: 0 }}>
           Gerar chave
         </Button>
       </Box>
+
+      {keyError && !dialogOpen && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setKeyError("")}>{keyError}</Alert>}
 
       {keys === null ? (
         <CircularProgress size={20} />
@@ -95,6 +109,7 @@ function ApiKeysSection() {
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 800 }}>Nova chave de API</DialogTitle>
         <DialogContent>
+          {keyError && <Alert severity="error" sx={{ mb: 2 }}>{keyError}</Alert>}
           {newKeyValue ? (
             <Box>
               <Alert severity="warning" sx={{ mb: 2 }}>Copie agora — por segurança, essa chave não é mostrada de novo por completo.</Alert>
@@ -109,7 +124,9 @@ function ApiKeysSection() {
         </DialogContent>
         <DialogActions sx={{ p: 2.5, pt: 0 }}>
           {!newKeyValue ? (
-            <Button variant="contained" onClick={createKey}>Gerar</Button>
+            <Button variant="contained" onClick={createKey} disabled={creating}>
+              {creating ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : "Gerar"}
+            </Button>
           ) : (
             <Button variant="contained" onClick={() => { setDialogOpen(false); setNewKeyValue(""); }}>Concluído</Button>
           )}

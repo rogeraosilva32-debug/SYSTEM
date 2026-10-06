@@ -2,7 +2,14 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Box, Typography, Button, TextField, MenuItem, CircularProgress, Chip, Checkbox,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton, FormControlLabel, Alert, Autocomplete,
+  ToggleButton, ToggleButtonGroup, Stepper, Step, StepButton, useMediaQuery,
 } from "@mui/material";
+import PersonOutlineIcon from "@mui/icons-material/PersonOutlined";
+import PlaceOutlinedIcon from "@mui/icons-material/PlaceOutlined";
+import FastfoodOutlinedIcon from "@mui/icons-material/FastfoodOutlined";
+import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
+import StorefrontIcon from "@mui/icons-material/StorefrontOutlined";
+import SoupKitchenIcon from "@mui/icons-material/SoupKitchenOutlined";
 import RemoveIcon from "@mui/icons-material/Remove";
 import AddIcon from "@mui/icons-material/Add";
 import CloseIcon from "@mui/icons-material/Close";
@@ -25,6 +32,7 @@ import {
 } from "../../utils/delivery";
 
 const COLUMNS = ["received", "preparing", "ready", "on_route", "problem"];
+const isLocal = (o) => o?.order_type === "local";
 
 function minutesAgo(iso) {
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -172,6 +180,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
   const store = settings?.store_lat ? {
     lat: settings.store_lat, lng: settings.store_lng, city: settings.store_city, state: settings.store_state,
   } : null;
+  const [orderType, setOrderType] = useState("delivery");
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
   const [customerId, setCustomerId] = useState(null);
@@ -187,9 +196,27 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [found, setFound] = useState("");
+  const [step, setStep] = useState("client");
+  const [checking, setChecking] = useState(false);
+  const narrow = useMediaQuery("(max-width:600px)");
 
+  // Ao abrir de novo, volta para a primeira etapa (o que já foi digitado fica).
+  useEffect(() => { if (open) { setStep("client"); setError(""); } }, [open]); // eslint-disable-line react-hooks/set-state-in-effect
+
+  const local = orderType === "local";
+  // Uma etapa por vez: cliente → endereço (só entrega) → produtos → pagamento.
+  const steps = [
+    { key: "client", label: "Cliente", icon: <PersonOutlineIcon fontSize="small" /> },
+    ...(local ? [] : [{ key: "address", label: "Endereço", icon: <PlaceOutlinedIcon fontSize="small" /> }]),
+    { key: "items", label: "Produtos", icon: <FastfoodOutlinedIcon fontSize="small" /> },
+    { key: "payment", label: "Pagamento", icon: <PaymentsOutlinedIcon fontSize="small" /> },
+  ];
+  const stepIndex = Math.max(0, steps.findIndex((x) => x.key === step));
+  const current = steps[stepIndex];
+  const isLast = stepIndex === steps.length - 1;
   const reset = () => {
-    setPhone(""); setName(""); setCustomerId(null); setAddress(EMPTY_ADDRESS); setComplement("");
+    setStep("client");
+    setOrderType("delivery"); setPhone(""); setName(""); setCustomerId(null); setAddress(EMPTY_ADDRESS); setComplement("");
     setSource("telefone"); setCart([]); setFee(""); setPayment("dinheiro");
     setChangeFor(""); setNotes(""); setSaveCustomer(true); setError(""); setFound("");
   };
@@ -202,7 +229,18 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
   }, [zones, address.neighborhood]);
 
   const subtotal = cart.reduce((s, it) => s + it.unit * it.quantity, 0);
-  const feeValue = fee === "" ? zoneFee || 0 : parsePrice(fee) || 0;
+  const feeValue = local ? 0 : fee === "" ? zoneFee || 0 : parsePrice(fee) || 0;
+  const feeInvalid = !local && fee.trim() !== "" && (parsePrice(fee) == null || parsePrice(fee) < 0);
+  const changeInvalid = payment === "dinheiro" && changeFor.trim() !== "" && parsePrice(changeFor) == null;
+
+  // Balcão costuma ser venda na loja; entrega, pedido por telefone.
+  const changeType = (t) => {
+    if (!t || t === orderType) return;
+    setOrderType(t);
+    setError("");
+    if (t === "local" && step === "address") setStep("client");
+    setSource((s) => (t === "local" && s === "telefone" ? "balcao" : t === "delivery" && s === "balcao" ? "telefone" : s));
+  };
 
   const lookupCustomer = async () => {
     const digits = phone.replace(/\D/g, "");
@@ -222,13 +260,8 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
     }
   };
 
-  const handleSave = async () => {
-    setError("");
-    if (!name.trim()) { setError("Informe o nome do cliente."); return; }
-    if (cart.length === 0) { setError("Adicione ao menos um produto do cardápio."); return; }
-    setSaving(true);
-    // Sem ponto no mapa o motoboy fica sem rota: tenta localizar agora o que
-    // foi digitado e, se não achar, pede para marcar no mapa.
+  // Antes de sair da etapa do endereço: precisa de ponto no mapa (rota do motoboy).
+  const ensureLocated = async () => {
     let addr = address;
     if ((!addr.lat || !addr.lng) && (addr.street || addr.neighborhood)) {
       const r = await locateAddress({ ...addr, city: addr.city || store?.city, state: addr.state || store?.state }, store).catch(() => null);
@@ -237,108 +270,236 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
         setAddress(addr);
       }
     }
-    const { lat, lng } = addr;
-    if (!lat || !lng) {
-      setSaving(false);
-      setError("Não achei esse endereço no mapa. Confira o endereço, use a busca ou clique no mapa no ponto da entrega.");
-      return;
-    }
-    const digits = phone.replace(/\D/g, "") || null;
-    const addressCols = {
-      address_street: addr.street || null, address_number: addr.number || null,
-      address_complement: complement || null, address_neighborhood: addr.neighborhood || null,
-      address_city: addr.city || store?.city || null, lat: lat || null, lng: lng || null,
-    };
-
-    let custId = customerId;
-    if (saveCustomer && digits) {
-      if (custId) {
-        await supabase.from("customers").update({ name: name.trim(), ...addressCols }).eq("id", custId);
-      } else {
-        const { data } = await supabase.from("customers")
-          .insert({ company_id: companyId, name: name.trim(), phone: digits, ...addressCols }).select("id").single();
-        custId = data?.id || null;
-      }
-    }
-
-    // Valor dos itens calculado no banco a partir do cardápio.
-    const { data, error: insertError } = await supabase.rpc("create_delivery_order", {
-      p_order: {
-        source, customer_id: custId, customer_name: name.trim(), customer_phone: digits,
-        ...addressCols,
-        delivery_fee: fee === "" ? null : parsePrice(fee) || 0,
-        payment_method: payment,
-        change_for: payment === "dinheiro" && changeFor ? parsePrice(changeFor) : null,
-        notes: notes.trim() || null,
-      },
-      p_items: cart.map((it) => ({
-        product_id: it.product.id, variant: it.variant, addon_ids: it.addons.map((a) => a.id),
-        quantity: it.quantity, notes: it.notes || null,
-      })),
-    });
-
-    setSaving(false);
-    if (insertError) { setError(insertError.message); return; }
-    onCreated(data);
-    reset();
-    onClose();
+    return Boolean(addr.lat && addr.lng);
   };
 
+  const stepError = (key) => {
+    if (key === "client" && !local && !name.trim()) return "Informe o nome do cliente.";
+    if (key === "address" && !address.street && !address.neighborhood && !address.lat) return "Digite o endereço, busque ou marque o ponto no mapa.";
+    if (key === "items" && cart.length === 0) return "Adicione ao menos um produto do cardápio.";
+    return "";
+  };
+
+  const next = async () => {
+    if (checking) return;
+    const msg = stepError(current.key);
+    if (msg) { setError(msg); return; }
+    if (current.key === "address") {
+      setChecking(true);
+      const ok = await ensureLocated();
+      setChecking(false);
+      if (!ok) { setError("Não achei esse endereço no mapa. Confira o endereço, use a busca ou clique no mapa no ponto da entrega."); return; }
+    }
+    setError("");
+    setStep(steps[stepIndex + 1].key);
+  };
+
+  // Volta para qualquer etapa anterior; para frente só passando pela validação.
+  const goTo = (i) => {
+    if (i < stepIndex) { setError(""); setStep(steps[i].key); }
+    else if (i === stepIndex + 1) next();
+  };
+
+  const handleSave = async () => {
+    if (saving) return;
+    setError("");
+    if (!local && !name.trim()) { setStep("client"); setError("Informe o nome do cliente."); return; }
+    if (cart.length === 0) { setStep("items"); setError("Adicione ao menos um produto do cardápio."); return; }
+    if (feeInvalid) { setError("Taxa de entrega inválida. Use só números, ex.: 5,00."); return; }
+    if (changeInvalid) { setError("Valor do troco inválido. Use só números, ex.: 50,00."); return; }
+    setSaving(true);
+    try {
+      let addressCols = {};
+      if (!local) {
+        // Sem ponto no mapa o motoboy fica sem rota: tenta localizar agora o que
+        // foi digitado e, se não achar, pede para marcar no mapa.
+        let addr = address;
+        if ((!addr.lat || !addr.lng) && (addr.street || addr.neighborhood)) {
+          const r = await locateAddress({ ...addr, city: addr.city || store?.city, state: addr.state || store?.state }, store).catch(() => null);
+          if (r) {
+            addr = { ...addr, neighborhood: addr.neighborhood || r.neighborhood, city: addr.city || r.city, lat: r.lat, lng: r.lng, precision: r.precision };
+            setAddress(addr);
+          }
+        }
+        if (!addr.lat || !addr.lng) {
+          setStep("address");
+          setError("Não achei esse endereço no mapa. Confira o endereço, use a busca ou clique no mapa no ponto da entrega.");
+          return;
+        }
+        addressCols = {
+          address_street: addr.street || null, address_number: addr.number || null,
+          address_complement: complement || null, address_neighborhood: addr.neighborhood || null,
+          address_city: addr.city || store?.city || null, lat: addr.lat, lng: addr.lng,
+        };
+      }
+      const digits = phone.replace(/\D/g, "") || null;
+
+      // Salvar o cliente é um extra: se falhar, o pedido sai do mesmo jeito.
+      // No pedido local só nome/telefone (não apaga o endereço já salvo).
+      let custId = customerId;
+      if (saveCustomer && digits && name.trim()) {
+        if (custId) {
+          await supabase.from("customers").update({ name: name.trim(), ...addressCols }).eq("id", custId);
+        } else {
+          const { data } = await supabase.from("customers")
+            .insert({ company_id: companyId, name: name.trim(), phone: digits, ...addressCols }).select("id").single();
+          custId = data?.id || null;
+        }
+      }
+
+      // Valor dos itens calculado no banco a partir do cardápio.
+      const { data, error: insertError } = await supabase.rpc("create_delivery_order", {
+        p_order: {
+          order_type: orderType, source, customer_id: custId, customer_name: name.trim(), customer_phone: digits,
+          ...addressCols,
+          delivery_fee: local || fee.trim() === "" ? null : parsePrice(fee),
+          payment_method: payment,
+          change_for: payment === "dinheiro" && changeFor.trim() ? parsePrice(changeFor) : null,
+          notes: notes.trim() || null,
+        },
+        p_items: cart.map((it) => ({
+          product_id: it.product.id, variant: it.variant, addon_ids: it.addons.map((a) => a.id),
+          quantity: it.quantity, notes: it.notes || null,
+        })),
+      });
+      if (insertError) { setError(insertError.message); return; }
+      onCreated(data);
+      reset();
+      onClose();
+    } catch (e) {
+      setError(`Não foi possível criar o pedido: ${e?.message || "falha de conexão"}. Tente de novo.`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const itemCount = cart.reduce((n, it) => n + it.quantity, 0);
+  const label = (t) => <Typography sx={{ fontSize: 13, fontWeight: 700, color: "#44403C", mb: 0.8 }}>{t}</Typography>;
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontWeight: 800 }}>Novo pedido</DialogTitle>
-      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 1.5, pt: "8px !important" }}>
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.2 }}>
-          <TextField label="Telefone do cliente" size="small" value={phone}
-            onChange={(e) => setPhone(e.target.value)} onBlur={lookupCustomer} />
-          <TextField label="Nome do cliente" size="small" value={name} onChange={(e) => setName(e.target.value)} />
-        </Box>
-        {found && <Typography sx={{ fontSize: 11.5, color: "#4B7A5E", fontWeight: 600 }}>{found}</Typography>}
-        {!store && (
-          <Alert severity="info" sx={{ py: 0 }}>Cadastre o endereço da loja em "Entregas: ajustes" para as buscas priorizarem a sua cidade e as rotas saírem da loja.</Alert>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={narrow}>
+      <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>
+        {local ? "Novo pedido local" : "Novo pedido de entrega"}
+        <Typography sx={{ fontSize: 12.5, color: "#78716C", fontWeight: 600 }}>
+          Etapa {stepIndex + 1} de {steps.length}: {current.label}
+        </Typography>
+      </DialogTitle>
+      <Box sx={{ px: 3, pb: 1 }}>
+        <Stepper nonLinear activeStep={stepIndex} alternativeLabel>
+          {steps.map((x, i) => (
+            <Step key={x.key} completed={i < stepIndex}>
+              <StepButton onClick={() => goTo(i)} aria-label={`Etapa ${x.label}`}>
+                <Typography sx={{ fontSize: 12, fontWeight: i === stepIndex ? 800 : 600 }}>{x.label}</Typography>
+              </StepButton>
+            </Step>
+          ))}
+        </Stepper>
+      </Box>
+      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "12px !important", minHeight: { sm: 360 } }}>
+        {current.key === "client" && (
+          <>
+            <Box>
+              {label("Como o cliente vai receber?")}
+              <ToggleButtonGroup exclusive fullWidth color="primary" value={orderType}
+                onChange={(_, t) => changeType(t)} aria-label="Tipo do pedido">
+                <ToggleButton value="delivery" sx={{ gap: 1, py: 1.5, fontWeight: 700, textTransform: "none", fontSize: 15 }}><TwoWheelerIcon /> Entrega</ToggleButton>
+                <ToggleButton value="local" sx={{ gap: 1, py: 1.5, fontWeight: 700, textTransform: "none", fontSize: 15 }}><StorefrontIcon /> Pedido local</ToggleButton>
+              </ToggleButtonGroup>
+              <Typography sx={{ fontSize: 12.5, color: "#78716C", mt: 0.8 }}>
+                {local ? "Retirada ou consumo na loja: sem endereço, sem taxa de entrega e sem motoboy." : "Vai com motoboy: na próxima etapa você informa o endereço."}
+              </Typography>
+            </Box>
+            <Box>
+              {label("Quem é o cliente?")}
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+                <TextField label={local ? "Telefone (opcional)" : "Telefone do cliente"} value={phone} inputMode="tel" autoFocus
+                  onChange={(e) => setPhone(e.target.value)} onBlur={lookupCustomer}
+                  helperText={found && !local ? "" : "Com o telefone, o cliente já cadastrado é preenchido sozinho."} />
+                {found && !local && <Alert severity="success" sx={{ py: 0 }}>{found}</Alert>}
+                <TextField label={local ? "Nome do cliente (opcional)" : "Nome do cliente"} value={name} onChange={(e) => setName(e.target.value)} />
+              </Box>
+            </Box>
+          </>
         )}
-        <DeliveryAddressField value={address} onChange={setAddress} store={store} />
-        <TextField label="Complemento / referência" size="small" value={complement} onChange={(e) => setComplement(e.target.value)} />
-        <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: "#78716C", mt: 0.5 }}>PRODUTOS</Typography>
-        {menu.items.length === 0 && (
-          <Alert severity="info" sx={{ py: 0 }}>Nenhum produto no cardápio. O admin da empresa cadastra na aba “Cardápio”.</Alert>
+
+        {current.key === "address" && (
+          <>
+            {!store && (
+              <Alert severity="info" sx={{ py: 0 }}>Cadastre o endereço da loja em "Entregas: ajustes" para as buscas priorizarem a sua cidade e as rotas saírem da loja.</Alert>
+            )}
+            <DeliveryAddressField value={address} onChange={setAddress} store={store} />
+            <TextField label="Complemento / referência" value={complement} onChange={(e) => setComplement(e.target.value)}
+              placeholder="Ex.: apto 12, casa dos fundos, perto da padaria" />
+          </>
         )}
-        <ProductPicker menu={menu} onAdd={(it) => setCart([...cart, it])} />
-        <Cart cart={cart} setCart={setCart} />
-        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.2 }}>
-          <TextField label="Taxa de entrega" size="small" value={fee} onChange={(e) => setFee(e.target.value)} inputMode="decimal"
-            placeholder={zoneFee != null ? String(zoneFee) : ""}
-            helperText={zoneFee != null && fee === "" ? `Bairro: ${money(zoneFee)}` : " "} />
-          <TextField select label="Origem" size="small" value={source} onChange={(e) => setSource(e.target.value)}>
-            {Object.entries(SOURCE_LABEL).filter(([k]) => k !== "ifood").map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
-          </TextField>
-        </Box>
-        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.2 }}>
-          <TextField select label="Pagamento" size="small" value={payment} onChange={(e) => setPayment(e.target.value)}>
-            {Object.entries(PAYMENT_LABEL).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
-          </TextField>
-          {payment === "dinheiro" && (
-            <TextField label="Troco para" size="small" value={changeFor} onChange={(e) => setChangeFor(e.target.value)} inputMode="decimal" />
-          )}
-        </Box>
-        <TextField label="Observações" size="small" value={notes} onChange={(e) => setNotes(e.target.value)} />
-        <Box sx={{ p: 1.5, background: "#FAFAF9", borderRadius: "12px", display: "flex", flexDirection: "column", gap: 0.4 }}>
-          <SummaryLine label="Produtos" value={money(subtotal)} />
-          <SummaryLine label="Taxa de entrega" value={money(feeValue)} />
-          {hasCourierFee && <SummaryLine label="Taxa do motoboy" value="somada ao escolher o motoboy" muted />}
-          <SummaryLine label="Total agora" value={money(subtotal + feeValue)} strong />
-        </Box>
-        <FormControlLabel
-          control={<Checkbox size="small" checked={saveCustomer} onChange={(e) => setSaveCustomer(e.target.checked)} />}
-          label={<Typography sx={{ fontSize: 13 }}>Salvar cliente para o próximo pedido</Typography>}
-        />
+
+        {current.key === "items" && (
+          <>
+            {menu.items.length === 0 && (
+              <Alert severity="info" sx={{ py: 0 }}>Nenhum produto no cardápio. O admin da empresa cadastra na aba “Cardápio”.</Alert>
+            )}
+            <ProductPicker menu={menu} onAdd={(it) => { setCart([...cart, it]); setError(""); }} />
+            <Box>
+              {label(`No pedido${itemCount ? ` (${itemCount})` : ""}`)}
+              <Cart cart={cart} setCart={setCart} />
+            </Box>
+          </>
+        )}
+
+        {current.key === "payment" && (
+          <>
+            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5 }}>
+              <TextField select label="Pagamento" value={payment} onChange={(e) => setPayment(e.target.value)}>
+                {Object.entries(PAYMENT_LABEL).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
+              </TextField>
+              {payment === "dinheiro" ? (
+                <TextField label="Troco para" value={changeFor} onChange={(e) => setChangeFor(e.target.value)} inputMode="decimal"
+                  error={changeInvalid} helperText={changeInvalid ? "Valor inválido" : "Deixe vazio se não precisa de troco."} />
+              ) : <Box sx={{ display: { xs: "none", sm: "block" } }} />}
+              {!local && (
+                <TextField label="Taxa de entrega" value={fee} onChange={(e) => setFee(e.target.value)} inputMode="decimal"
+                  placeholder={zoneFee != null ? String(zoneFee) : ""} error={feeInvalid}
+                  helperText={feeInvalid ? "Valor inválido" : zoneFee != null && fee === "" ? `Bairro: ${money(zoneFee)}` : "Vazio = taxa do bairro."} />
+              )}
+              <TextField select label="Origem do pedido" value={source} onChange={(e) => setSource(e.target.value)}>
+                {Object.entries(SOURCE_LABEL).filter(([k]) => k !== "ifood").map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
+              </TextField>
+            </Box>
+            <TextField label="Observações do pedido" value={notes} onChange={(e) => setNotes(e.target.value)} multiline minRows={2} />
+            <Box sx={{ p: 1.5, background: "#FAFAF9", borderRadius: "12px", display: "flex", flexDirection: "column", gap: 0.5 }}>
+              <SummaryLine label="Cliente" value={name.trim() || (local ? "Cliente no balcão" : "—")} />
+              {!local && <SummaryLine label="Entrega em" value={orderAddress({ address_street: address.street, address_number: address.number, address_neighborhood: address.neighborhood }) || "—"} />}
+              <SummaryLine label={`Produtos (${itemCount})`} value={money(subtotal)} />
+              {!local && <SummaryLine label="Taxa de entrega" value={money(feeValue)} />}
+              {!local && hasCourierFee && <SummaryLine label="Taxa do motoboy" value="somada ao escolher o motoboy" muted />}
+              <SummaryLine label={local ? "Total" : "Total agora"} value={money(subtotal + feeValue)} strong />
+            </Box>
+            <FormControlLabel
+              control={<Checkbox size="small" checked={saveCustomer} onChange={(e) => setSaveCustomer(e.target.checked)} />}
+              label={<Typography sx={{ fontSize: 13 }}>Salvar cliente para o próximo pedido</Typography>}
+              sx={{ display: local && !phone.trim() ? "none" : undefined }}
+            />
+          </>
+        )}
         {error && <Alert severity="error">{error}</Alert>}
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions sx={{ px: 3, pb: 2, gap: 1, flexWrap: "wrap" }}>
+        {itemCount > 0 && current.key !== "payment" && (
+          <Typography sx={{ mr: "auto", fontSize: 13, fontWeight: 700, color: "#57534E" }}>
+            {itemCount} {itemCount === 1 ? "item" : "itens"} · {money(subtotal)}
+          </Typography>
+        )}
         <Button onClick={onClose}>Cancelar</Button>
-        <Button variant="contained" onClick={handleSave} disabled={saving}>
-          {saving ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : "Criar pedido"}
-        </Button>
+        {stepIndex > 0 && <Button variant="outlined" onClick={() => goTo(stepIndex - 1)}>Voltar</Button>}
+        {isLast ? (
+          <Button variant="contained" onClick={handleSave} disabled={saving}>
+            {saving ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : local ? "Criar pedido local" : "Criar pedido"}
+          </Button>
+        ) : (
+          <Button variant="contained" onClick={next} disabled={checking}>
+            {checking ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : "Continuar"}
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );
@@ -353,28 +514,38 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
   const [showForce, setShowForce] = useState(false);
   const [lines, setLines] = useState([]);
 
+  // Pelo id: o pedido é atualizado a cada recarga da fila, os itens não mudam.
+  const orderId = order?.id;
   useEffect(() => {
-    if (!order) return;
-    supabase.from("delivery_order_items").select("*").eq("order_id", order.id).order("position")
+    if (!orderId) return;
+    supabase.from("delivery_order_items").select("*").eq("order_id", orderId).order("position")
       .then(({ data }) => setLines(data || []));
-  }, [order]);
+  }, [orderId]);
 
   useEffect(() => {
-    if (!order || !company?.feature_delivery_code) return;
-    supabase.from("order_delivery_codes").select("code, locked, failed_attempts").eq("order_id", order.id).maybeSingle()
+    if (!orderId || !company?.feature_delivery_code) return;
+    supabase.from("order_delivery_codes").select("code, locked, failed_attempts").eq("order_id", orderId).maybeSingle()
       .then(({ data }) => setCode(data));
-  }, [order, company]);
+  }, [orderId, company]);
 
   if (!order) return null;
 
   const run = async (fn) => {
+    if (busy) return false;
     setBusy(true); setError("");
-    const { error: err } = await fn();
-    setBusy(false);
-    if (err) { setError(err.message); return false; }
+    try {
+      const { error: err } = await fn();
+      if (err) { setError(err.message); return false; }
+    } catch (e) {
+      setError(`Falha de conexão: ${e?.message || "tente de novo"}.`);
+      return false;
+    } finally {
+      setBusy(false);
+    }
     onChanged();
     return true;
   };
+  const local = isLocal(order);
 
   const setStatus = (status) => run(() => supabase.from("delivery_orders").update({ status }).eq("id", order.id));
   const inQueue = ["received", "preparing", "ready"].includes(order.status) && !order.run_id;
@@ -385,6 +556,7 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
       <DialogTitle sx={{ fontWeight: 800, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           Pedido #{order.number} <StatusChip status={order.status} />
+          {local && <Chip size="small" icon={<StorefrontIcon />} label="Pedido local" sx={{ height: 22, fontSize: 11, fontWeight: 700 }} />}
         </Box>
         <IconButton onClick={onClose} size="small"><CloseIcon fontSize="small" /></IconButton>
       </DialogTitle>
@@ -395,9 +567,9 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
           <InfoField label="Total" value={money(order.total)} />
           <InfoField label="Pagamento" value={`${PAYMENT_LABEL[order.payment_method] || "—"}${order.change_for ? ` · troco p/ ${money(order.change_for)}` : ""}`} />
           <InfoField label="Origem" value={SOURCE_LABEL[order.source]} />
-          <InfoField label="Motoboy" value={order.courier?.name || "—"} />
+          <InfoField label={local ? "Tipo" : "Motoboy"} value={local ? "Retirada / consumo na loja" : order.courier?.name || "—"} />
         </Box>
-        <InfoField label="Endereço" value={orderAddress(order) || "Sem endereço"} />
+        {!local && <InfoField label="Endereço" value={orderAddress(order) || "Sem endereço"} />}
         {lines.length > 0 ? (
           <Box sx={{ p: 1.5, border: "1px solid #E7E5E4", borderRadius: "12px", display: "flex", flexDirection: "column", gap: 0.5 }}>
             {lines.map((l) => (
@@ -413,7 +585,7 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
             ))}
             <Box sx={{ borderTop: "1px solid #F5F5F4", mt: 0.5, pt: 0.7, display: "flex", flexDirection: "column", gap: 0.3 }}>
               <SummaryLine label="Produtos" value={money(order.subtotal)} />
-              <SummaryLine label="Taxa de entrega" value={money(order.delivery_fee)} />
+              {!local && <SummaryLine label="Taxa de entrega" value={money(order.delivery_fee)} />}
               {order.courier_fee != null && <SummaryLine label={`Taxa do motoboy${order.courier?.name ? ` (${order.courier.name})` : ""}`} value={money(order.courier_fee)} />}
               <SummaryLine label="Total" value={money(order.total)} strong />
             </Box>
@@ -428,7 +600,7 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
         {order.problem_reason && order.status === "problem" && <Alert severity="warning">Motoboy informou: {order.problem_reason}</Alert>}
         {order.forced_reason && <Alert severity="info">Finalizado manualmente: {order.forced_reason}</Alert>}
 
-        {company?.feature_delivery_code && code && order.status !== "delivered" && order.status !== "cancelled" && (
+        {!local && company?.feature_delivery_code && code && order.status !== "delivered" && order.status !== "cancelled" && (
           <Box sx={{ p: 1.5, border: "1px solid #E7E5E4", borderRadius: "12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
             <Box>
               <Typography sx={{ fontSize: 10.5, fontWeight: 700, color: "#8A8580", letterSpacing: "0.06em" }}>CÓDIGO DE ENTREGA</Typography>
@@ -450,7 +622,7 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
           </Box>
         )}
 
-        {order.lat && order.lng && (
+        {!local && order.lat && order.lng && (
           <RouteMap lat={order.lat} lng={order.lng} address={orderAddress(order)}
             origin={company?.store_lat ? { lat: company.store_lat, lng: company.store_lng } : null}
             trackCollaboratorId={onRoute ? order.courier_id : null} mapHeight={220} />
@@ -462,8 +634,14 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
           <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
             {order.status !== "received" && <Button variant="outlined" disabled={busy} onClick={() => setStatus("received")}>Voltar para recebido</Button>}
             {order.status !== "preparing" && <Button variant="outlined" disabled={busy} onClick={() => setStatus("preparing")}>Em preparo</Button>}
-            {order.status !== "ready" && <Button variant="contained" disabled={busy} onClick={() => setStatus("ready")}>Pronto para despacho</Button>}
-            <Button color="error" disabled={busy} onClick={() => setStatus("cancelled")}>Cancelar pedido</Button>
+            {order.status !== "ready" && <Button variant={local ? "outlined" : "contained"} disabled={busy} onClick={() => setStatus("ready")}>{local ? "Pronto" : "Pronto para despacho"}</Button>}
+            {local && (
+              <Button variant="contained" color="success" disabled={busy}
+                onClick={() => run(() => supabase.rpc("complete_local_order", { p_order_id: order.id }))}>
+                Entregue ao cliente
+              </Button>
+            )}
+            <Button color="error" disabled={busy} onClick={() => { if (window.confirm(`Cancelar o pedido #${order.number}?`)) setStatus("cancelled"); }}>Cancelar pedido</Button>
           </Box>
         )}
 
@@ -526,9 +704,14 @@ function RunDialog({ open, onClose, onDone, couriers, available, run, courierFee
   const [addId, setAddId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const wasOpen = useRef(false);
 
+  // Monta a lista só ao abrir: a fila recarrega sozinha (tempo real, despacho
+  // automático) e não pode apagar o que o gestor está montando.
   useEffect(() => {
-    if (!open) return;
+    const opening = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!opening) return;
     /* eslint-disable react-hooks/set-state-in-effect */
     setError(""); setAddId("");
     if (run) { setCourierId(run.courier_id); setStops(run.orders); }
@@ -549,13 +732,25 @@ function RunDialog({ open, onClose, onDone, couriers, available, run, courierFee
   };
 
   const save = async () => {
+    if (busy) return;
     setBusy(true); setError("");
     const ids = stops.map((s) => s.id);
-    const { error: err } = run
-      ? await supabase.rpc("update_run", { p_run: run.id, p_order_ids: ids, p_courier: courierId })
-      : await supabase.rpc("dispatch_run", { p_courier: courierId, p_order_ids: ids });
-    setBusy(false);
-    if (err) { setError(err.message); return; }
+    try {
+      const { error: err } = run
+        ? await supabase.rpc("update_run", { p_run: run.id, p_order_ids: ids, p_courier: courierId })
+        : await supabase.rpc("dispatch_run", { p_courier: courierId, p_order_ids: ids });
+      if (err) {
+        setError(/não está disponível|indisponível/.test(err.message)
+          ? `${err.message} Algum pedido já saiu com outro motoboy ou mudou; feche e confira a fila.`
+          : err.message);
+        return;
+      }
+    } catch (e) {
+      setError(`Falha de conexão: ${e?.message || "tente de novo"}.`);
+      return;
+    } finally {
+      setBusy(false);
+    }
     onDone();
     onClose();
   };
@@ -605,6 +800,46 @@ function RunDialog({ open, onClose, onDone, couriers, available, run, courierFee
   );
 }
 
+// ───────────────────────── Motoboys em expediente ─────────────────────────
+function ShiftPanel({ shifts, couriers, runs, onChanged }) {
+  const [error, setError] = useState("");
+  if (!shifts.length) return null;
+  const act = async (fn) => {
+    setError("");
+    const { error: err } = await fn();
+    if (err) setError(err.message);
+    onChanged();
+  };
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: "#78716C", mb: 1 }}>EM EXPEDIENTE</Typography>
+      {error && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>{error}</Alert>}
+      <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+        {shifts.map((sh) => {
+          const name = couriers.find((c) => c.id === sh.courier_id)?.name || "Motoboy";
+          const run = runs.find((r) => r.courier_id === sh.courier_id);
+          const state = sh.paused ? "Em pausa" : run ? (run.status === "planned" ? "Saída aguardando" : "Em rota") : "Livre";
+          const color = sh.paused ? "#B0793D" : run ? "#4F5BA6" : "#4B7A5E";
+          return (
+            <Box key={sh.id} sx={{ display: "flex", alignItems: "center", gap: 1, px: 1.2, py: 0.6, border: "1px solid #E7E5E4", borderRadius: "10px", background: "#fff" }}>
+              <Box>
+                <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{name}</Typography>
+                <Typography sx={{ fontSize: 11, fontWeight: 700, color }}>{state}{sh.paused && sh.paused_reason ? ` · ${sh.paused_reason}` : ""}</Typography>
+              </Box>
+              <Button size="small" onClick={() => act(() => supabase.rpc("set_shift_paused", { p_paused: !sh.paused, p_courier: sh.courier_id }))}>
+                {sh.paused ? "Liberar" : "Pausar"}
+              </Button>
+              <Button size="small" color="inherit" onClick={() => { if (window.confirm(`Encerrar o expediente de ${name}?`)) act(() => supabase.rpc("end_shift", { p_shift: sh.id })); }}>
+                Encerrar
+              </Button>
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
+
 // ───────────────────────── Aba principal ─────────────────────────
 export function OrdersTab() {
   const { companyId } = useAuth();
@@ -613,18 +848,20 @@ export function OrdersTab() {
   const [zones, setZones] = useState([]);
   const [couriers, setCouriers] = useState([]);
   const [company, setCompany] = useState(null);
+  const [autoDispatch, setAutoDispatch] = useState(false);
   const [menu, setMenu] = useState({ items: [], addons: [] });
   const [courierFees, setCourierFees] = useState({});
+  const [shifts, setShifts] = useState([]);
   const [deliveredToday, setDeliveredToday] = useState(0);
   const [selected, setSelected] = useState(new Set());
   const [showNew, setShowNew] = useState(false);
-  const [detail, setDetail] = useState(null);
+  const [detailId, setDetailId] = useState(null);
   const [runDialog, setRunDialog] = useState({ open: false, run: null });
   const reloadTimer = useRef(null);
 
   const load = useCallback(async () => {
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-    const [o, r, z, c, comp, d, cats, prods, fees] = await Promise.all([
+    const [o, r, z, c, comp, d, cats, prods, fees, sh, ad] = await Promise.all([
       supabase.from("delivery_orders").select("*, courier:courier_id(name)").eq("company_id", companyId)
         .in("status", COLUMNS).order("created_at"),
       supabase.from("delivery_runs").select("*, courier:courier_id(name)").eq("company_id", companyId)
@@ -637,7 +874,11 @@ export function OrdersTab() {
       supabase.from("product_categories").select("id, name, sort_order, active").eq("company_id", companyId),
       supabase.from("products").select("*").eq("company_id", companyId).eq("active", true).order("sort_order").order("name"),
       supabase.rpc("my_courier_fees"),
+      supabase.from("courier_shifts").select("id, courier_id, started_at, paused, paused_reason").eq("company_id", companyId).is("ended_at", null).order("started_at"),
+      supabase.from("companies").select("auto_dispatch").eq("id", companyId).maybeSingle(),
     ]);
+    setAutoDispatch(ad.data?.auto_dispatch === true);
+    setShifts(sh.data || []);
     // Cardápio do pedido: só produtos ativos de categorias visíveis, na ordem das categorias.
     const catList = (cats.data || []).slice().sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
     const catIndex = new Map(catList.map((cat, i) => [cat.id, i]));
@@ -671,16 +912,22 @@ export function OrdersTab() {
     const channel = supabase.channel(`orders-${companyId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_orders", filter: `company_id=eq.${companyId}` }, schedule)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_runs", filter: `company_id=eq.${companyId}` }, schedule)
+      .on("postgres_changes", { event: "*", schema: "public", table: "courier_shifts", filter: `company_id=eq.${companyId}` }, schedule)
       .subscribe();
-    const interval = setInterval(load, 30000);
+    // Rede de segurança do despacho automático (o banco também despacha sozinho).
+    const interval = setInterval(() => { supabase.rpc("auto_dispatch_tick").then(load); }, 30000);
     return () => { clearTimeout(reloadTimer.current); clearInterval(interval); supabase.removeChannel(channel); };
   }, [companyId, load]);
 
   const dispatchable = useMemo(
-    () => (orders || []).filter((o) => ["received", "preparing", "ready"].includes(o.status) && !o.run_id)
+    () => (orders || []).filter((o) => ["received", "preparing", "ready"].includes(o.status) && !o.run_id && !isLocal(o))
       .map((o) => ({ ...o, _selected: selected.has(o.id) })),
     [orders, selected],
   );
+
+  // Detalhe sempre com o pedido atual da fila (fecha se ele sair da fila).
+  const detail = detailId ? (orders || []).find((o) => o.id === detailId) || null : null;
+  const setDetail = (o) => setDetailId(o?.id || null);
 
   const runsWithOrders = runs.map((r) => ({
     ...r,
@@ -694,19 +941,34 @@ export function OrdersTab() {
   };
 
   if (orders === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  const auto = autoDispatch;
 
   return (
     <Box>
       <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap", alignItems: "center" }}>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setShowNew(true)}>Novo pedido</Button>
-        <Button variant="outlined" startIcon={<TwoWheelerIcon />} disabled={selected.size === 0}
-          onClick={() => setRunDialog({ open: true, run: null })}>
-          Despachar {selected.size > 0 ? `(${selected.size})` : ""}
+        {/* Com o despacho automático ligado, o sistema monta as saídas sozinho. */}
+        {!auto && (
+          <Button variant="outlined" startIcon={<TwoWheelerIcon />} disabled={selected.size === 0}
+            onClick={() => setRunDialog({ open: true, run: null })}>
+            Despachar {selected.size > 0 ? `(${selected.size})` : ""}
+          </Button>
+        )}
+        <Button variant="text" startIcon={<SoupKitchenIcon />} onClick={() => window.open("/cozinha", "_blank", "noopener")}>
+          Modo cozinha
         </Button>
         <Typography sx={{ ml: "auto", fontSize: 12.5, color: "#78716C", fontWeight: 600 }}>
           Entregues hoje: {deliveredToday}
         </Typography>
       </Box>
+      {auto && (
+        <Alert severity={shifts.some((sh) => !sh.paused) ? "info" : "warning"} sx={{ mb: 2 }}>
+          {shifts.some((sh) => !sh.paused)
+            ? "Despacho automático ligado: cada saída vai sozinha para o motoboy livre em expediente, com a melhor rota."
+            : "Despacho automático ligado, mas nenhum motoboy está em expediente. Os pedidos esperam até alguém tocar em “Iniciar expediente” no app."}
+        </Alert>
+      )}
+      <ShiftPanel shifts={shifts} couriers={couriers} runs={runs} onChanged={load} />
       {zones.length === 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>Cadastre os bairros atendidos e as taxas na aba “Entregas: ajustes” para a taxa ser preenchida sozinha.</Alert>
       )}
@@ -714,7 +976,10 @@ export function OrdersTab() {
       {/* Fila */}
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: `repeat(${COLUMNS.length}, minmax(0, 1fr))` }, gap: 1.5, mb: 3 }}>
         {COLUMNS.map((col) => {
+          // Prontos formam uma fila: o que ficou pronto primeiro sai primeiro.
+          const readyAt = (o) => new Date(o.ready_at || o.created_at).getTime();
           const list = orders.filter((o) => o.status === col);
+          if (col === "ready") list.sort((a, b) => readyAt(a) - readyAt(b));
           if (col === "problem" && list.length === 0) return <Box key={col} sx={{ display: { xs: "none", md: "block" } }} />;
           return (
             <Box key={col} sx={{ background: "#F5F5F4", borderRadius: "14px", p: 1.2, minHeight: { md: 200 } }}>
@@ -722,22 +987,29 @@ export function OrdersTab() {
                 <Typography sx={{ fontSize: 12, fontWeight: 800, color: ORDER_STATUS[col].fg, letterSpacing: "0.04em" }}>{ORDER_STATUS[col].label.toUpperCase()}</Typography>
                 <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#A8A29E" }}>{list.length}</Typography>
               </Box>
-              {list.map((o) => (
-                <Box key={o.id} onClick={() => setDetail(o)}
+              {list.map((o, i) => (
+                <Box key={o.id} onClick={() => setDetail(o)} data-testid={col === "ready" ? "ready-order" : undefined}
                   sx={{ background: "#fff", border: "1px solid #E7E5E4", borderRadius: "12px", p: 1.2, mb: 1, cursor: "pointer", "&:hover": { borderColor: "#D6D3D1" } }}>
                   <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                    {["received", "preparing", "ready"].includes(o.status) && !o.run_id && (
+                    {!auto && ["received", "preparing", "ready"].includes(o.status) && !o.run_id && !isLocal(o) && (
                       <Checkbox size="small" sx={{ p: 0.3 }} checked={selected.has(o.id)}
                         onClick={(e) => e.stopPropagation()} onChange={() => toggle(o.id)} />
                     )}
+                    {col === "ready" && <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#fff", background: ORDER_STATUS.ready.fg, borderRadius: "6px", px: 0.6 }}>{i + 1}º</Typography>}
                     <Typography sx={{ fontWeight: 800, fontSize: 13.5 }}>#{o.number}</Typography>
                     <Typography sx={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.customer_name}</Typography>
-                    <Typography sx={{ fontSize: 11, color: "#A8A29E" }}>{minutesAgo(o.created_at)}</Typography>
+                    <Typography sx={{ fontSize: 11, color: "#A8A29E" }} title={col === "ready" ? "Tempo na fila de prontos" : undefined}>
+                      {minutesAgo(col === "ready" && o.ready_at ? o.ready_at : o.created_at)}
+                    </Typography>
                   </Box>
                   <Typography sx={{ fontSize: 11.5, color: "#78716C", mt: 0.3 }}>
-                    {o.address_neighborhood || "Sem bairro"} · {money(o.total)}
+                    {isLocal(o) ? "🏪 Pedido local" : o.address_neighborhood || "Sem bairro"} · {money(o.total)}
                   </Typography>
-                  {o.run_id && <Typography sx={{ fontSize: 11, color: "#4F5BA6", fontWeight: 700, mt: 0.3 }}>🛵 {o.courier?.name} · parada {o.stop_sequence}</Typography>}
+                  {o.run_id && (
+                    <Typography sx={{ fontSize: 11, color: "#4F5BA6", fontWeight: 700, mt: 0.3 }}>
+                      🛵 {o.courier?.name} · parada {o.stop_sequence}{o.status !== "on_route" && o.status !== "problem" ? " · aguardando o motoboy confirmar a saída" : ""}
+                    </Typography>
+                  )}
                 </Box>
               ))}
             </Box>
@@ -754,6 +1026,7 @@ export function OrdersTab() {
             <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
               <Typography sx={{ fontWeight: 800 }}>🛵 {r.courier?.name}</Typography>
               <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+                {r.auto && <Chip size="small" label="Automática" sx={{ height: 20, fontSize: 10.5, fontWeight: 700 }} />}
                 {r.strict_route && <Chip size="small" label="Rota exata" sx={{ height: 20, fontSize: 10.5, fontWeight: 700 }} />}
                 <Chip size="small" label={r.status === "planned" ? "Aguardando saída" : "Em rota"} sx={{ height: 20, fontSize: 10.5, fontWeight: 700 }} />
                 <Button size="small" onClick={() => setRunDialog({ open: true, run: r })}>Editar</Button>
@@ -761,7 +1034,7 @@ export function OrdersTab() {
             </Box>
             {r.orders.map((o) => (
               <Typography key={o.id} sx={{ fontSize: 12.5, color: "#57534E", cursor: "pointer" }} onClick={() => setDetail(o)}>
-                {o.stop_sequence}. #{o.number} {o.customer_name} · {o.address_neighborhood || "sem bairro"} · {ORDER_STATUS[o.status].label}
+                {o.stop_sequence}. #{o.number} {o.customer_name} · {o.address_neighborhood || "sem bairro"} · {ORDER_STATUS[o.status]?.label || o.status}
               </Typography>
             ))}
           </Box>
@@ -770,7 +1043,7 @@ export function OrdersTab() {
 
       <NewOrderDialog open={showNew} onClose={() => setShowNew(false)} onCreated={load} companyId={companyId} zones={zones}
         menu={menu} hasCourierFee={Object.keys(courierFees).length > 0} />
-      <OrderDetailDialog order={detail} company={company} onClose={() => setDetail(null)} onChanged={() => { setDetail(null); load(); }} />
+      <OrderDetailDialog key={detail?.id || "none"} order={detail} company={company} onClose={() => setDetail(null)} onChanged={() => { setDetail(null); load(); }} />
       <RunDialog
         open={runDialog.open} run={runDialog.run} couriers={couriers} available={dispatchable} courierFees={courierFees}
         onClose={() => setRunDialog({ open: false, run: null })}

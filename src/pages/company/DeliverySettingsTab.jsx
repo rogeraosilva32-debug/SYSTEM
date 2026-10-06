@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  Box, Typography, Button, TextField, Switch, CircularProgress, IconButton, Alert, Chip,
+  Box, Typography, Button, TextField, Switch, CircularProgress, IconButton, Alert, Chip, MenuItem,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
-import { money } from "../../utils/delivery";
+import { money, parsePrice } from "../../utils/delivery";
 import DeliveryAddressField from "../../components/DeliveryAddressField";
 import { refreshCompanySettings } from "../../hooks/useCompanySettings";
 
@@ -39,6 +39,121 @@ function StoreAddress({ company, onSaved }) {
   );
 }
 
+// Despacho automático: limites que a empresa define.
+function AutoDispatch({ company, onSave }) {
+  const [form, setForm] = useState({
+    auto_max_stops: company.auto_max_stops ?? 3, auto_max_detour_km: String(company.auto_max_detour_km ?? 2).replace(".", ","),
+    auto_hold_minutes: company.auto_hold_minutes ?? 0, auto_accept_minutes: company.auto_accept_minutes ?? 5,
+    auto_dispatch_when: company.auto_dispatch_when || "ready",
+  });
+  const [invalid, setInvalid] = useState("");
+  if (company.auto_dispatch === undefined) {
+    return <Alert severity="warning">Rode de novo o supabase-b2b-schema.sql no Supabase para liberar o despacho automático.</Alert>;
+  }
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const save = () => {
+    const int = (v, min, max) => {
+      const n = String(v).trim() === "" ? NaN : Number(v);
+      return Number.isInteger(n) && n >= min && n <= max ? n : null;
+    };
+    const values = {
+      auto_max_stops: int(form.auto_max_stops, 1, 20),
+      auto_max_detour_km: parsePrice(form.auto_max_detour_km),
+      auto_hold_minutes: int(form.auto_hold_minutes, 0, 30),
+      auto_accept_minutes: int(form.auto_accept_minutes, 0, 60),
+      auto_dispatch_when: form.auto_dispatch_when,
+    };
+    if (values.auto_max_stops == null) { setInvalid("Máximo de entregas: de 1 a 20."); return; }
+    if (values.auto_max_detour_km == null || values.auto_max_detour_km < 0 || values.auto_max_detour_km > 50) { setInvalid("Desvio máximo: de 0 a 50 km."); return; }
+    if (values.auto_hold_minutes == null) { setInvalid("Espera para juntar pedidos: de 0 a 30 minutos."); return; }
+    if (values.auto_accept_minutes == null) { setInvalid("Prazo para iniciar a saída: de 0 a 60 minutos."); return; }
+    setInvalid("");
+    onSave(values);
+  };
+  return (
+    <>
+      <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2 }}>
+        <Box>
+          <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Despachar sozinho para os motoboys em expediente</Typography>
+          <Typography sx={{ fontSize: 12.5, color: "#78716C", maxWidth: 540 }}>
+            Quando um motoboy em expediente fica livre, o sistema monta a saída começando pelo pedido que espera há mais
+            tempo e junta os que ficam no caminho, na ordem de menor trajeto. Desligue só se quiser montar as saídas à mão.
+          </Typography>
+        </Box>
+        <Switch checked={company.auto_dispatch} slotProps={{ input: { "aria-label": "Despacho automático" } }} onChange={(e) => onSave({ auto_dispatch: e.target.checked })} />
+      </Box>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5, mt: 2 }}>
+        <TextField size="small" type="number" label="Máximo de entregas por saída" value={form.auto_max_stops}
+          onChange={set("auto_max_stops")} inputProps={{ min: 1, max: 20 }}
+          helperText="Limite. A saída só junta pedidos que ficam no caminho." />
+        <TextField size="small" label="Desvio máximo para juntar um pedido (km)" value={form.auto_max_detour_km}
+          onChange={set("auto_max_detour_km")} inputMode="decimal"
+          helperText="Quanto o trajeto pode aumentar para levar mais um pedido." />
+        <TextField select size="small" label="Despachar pedidos" value={form.auto_dispatch_when} onChange={set("auto_dispatch_when")}
+          helperText=" ">
+          <MenuItem value="ready">Quando marcados como prontos</MenuItem>
+          <MenuItem value="any">Assim que chegam (sem esperar ficar pronto)</MenuItem>
+        </TextField>
+        <TextField size="small" type="number" label="Esperar para juntar pedidos (min)" value={form.auto_hold_minutes}
+          onChange={set("auto_hold_minutes")} inputProps={{ min: 0, max: 30 }}
+          helperText="0 = sai assim que houver motoboy livre." />
+        <TextField size="small" type="number" label="Prazo para o motoboy iniciar a saída (min)" value={form.auto_accept_minutes}
+          onChange={set("auto_accept_minutes")} inputProps={{ min: 0, max: 60 }}
+          helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." />
+      </Box>
+      {invalid && <Alert severity="error" sx={{ mt: 1.5 }}>{invalid}</Alert>}
+      <Button variant="outlined" sx={{ mt: 1.5 }} onClick={save}>Salvar limites</Button>
+    </>
+  );
+}
+
+// Link da tela da cozinha: abre a fila de preparo sem login (só a fila,
+// sem telefone, endereço ou valores). Trocar o link derruba o anterior.
+function KitchenLink() {
+  const [token, setToken] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const url = token ? `${window.location.origin}/cozinha/${token}` : "";
+  const get = async (reset) => {
+    if (reset && !window.confirm("Trocar o link? As telas abertas com o link antigo param de funcionar.")) return;
+    setBusy(true); setMsg(null);
+    try {
+      const { data, error } = await supabase.rpc("kitchen_display_token", { p_reset: Boolean(reset) });
+      if (error) { setMsg({ type: "error", text: /Could not find/.test(error.message) ? "Rode de novo o supabase-b2b-schema.sql para liberar o modo cozinha." : error.message }); return; }
+      setToken(data);
+      if (reset) setMsg({ type: "success", text: "Link trocado. Abra o novo link nas telas da cozinha." });
+    } catch {
+      setMsg({ type: "error", text: "Sem conexão. Tente de novo." });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(url); setMsg({ type: "success", text: "Link copiado." }); }
+    catch { setMsg({ type: "info", text: "Selecione o link e copie." }); }
+  };
+  return (
+    <Box>
+      <Typography sx={{ fontSize: 12.5, color: "#78716C", mb: 1.5 }}>
+        Tela cheia com os pedidos para preparar, com adicionais e observações. Abra na TV ou tablet da cozinha
+        pelo link abaixo (não precisa de login e não mostra telefone, endereço nem valores). Os gestores também
+        abrem pelo botão “Modo cozinha” na aba Pedidos.
+      </Typography>
+      {msg && <Alert severity={msg.type} sx={{ mb: 1.5 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
+      {token ? (
+        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
+          <TextField size="small" value={url} label="Link da cozinha" InputProps={{ readOnly: true }} onFocus={(e) => e.target.select()} sx={{ flex: 1, minWidth: 260 }} />
+          <Button variant="contained" onClick={copy}>Copiar</Button>
+          <Button onClick={() => window.open(url, "_blank", "noopener")}>Abrir</Button>
+          <Button color="error" disabled={busy} onClick={() => get(true)}>Trocar link</Button>
+        </Box>
+      ) : (
+        <Button variant="outlined" disabled={busy} onClick={() => get(false)}>Mostrar link da cozinha</Button>
+      )}
+    </Box>
+  );
+}
+
 function Section({ title, children }) {
   return (
     <Box sx={{ p: 2.5, border: "1px solid #E7E5E4", borderRadius: "16px", background: "#fff", mb: 2 }}>
@@ -66,8 +181,14 @@ export function DeliverySettingsTab() {
       supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
       supabase.from("delivery_zones").select("*").eq("company_id", companyId).order("name"),
     ]);
+    if (c.error || !c.data) {
+      setError(c.error?.message || "Empresa não encontrada. Saia e entre de novo.");
+      setCompany(false);
+      return;
+    }
+    if (z.error) setError(z.error.message);
     setCompany(c.data);
-    setMeters(c.data?.off_route_meters ?? 250);
+    setMeters(c.data.off_route_meters ?? 250);
     setZones(z.data || []);
   }, [companyId]);
 
@@ -86,11 +207,13 @@ export function DeliverySettingsTab() {
 
   const addZone = async () => {
     setError("");
-    if (!name.trim()) return;
+    if (!name.trim()) { setError("Informe o nome do bairro."); return; }
+    const feeValue = String(fee).trim() === "" ? 0 : parsePrice(fee);
+    if (feeValue == null || feeValue < 0) { setError("Taxa inválida. Use só números, ex.: 5,00."); return; }
+    const etaValue = String(eta).trim() === "" ? null : Number(eta);
+    if (etaValue != null && !(Number.isInteger(etaValue) && etaValue > 0 && etaValue <= 600)) { setError("Tempo inválido: minutos inteiros, ex.: 40."); return; }
     const { error: err } = await supabase.from("delivery_zones").insert({
-      company_id: companyId, name: name.trim(),
-      fee: Number(String(fee).replace(",", ".")) || 0,
-      eta_minutes: eta ? Number(eta) : null,
+      company_id: companyId, name: name.trim(), fee: feeValue, eta_minutes: etaValue,
     });
     if (err) { setError(err.code === "23505" ? "Esse bairro já está cadastrado." : err.message); return; }
     setName(""); setFee(""); setEta("");
@@ -98,15 +221,32 @@ export function DeliverySettingsTab() {
   };
 
   const updateZone = async (z, patch) => {
-    await supabase.from("delivery_zones").update(patch).eq("id", z.id);
+    setError("");
+    const { error: err } = await supabase.from("delivery_zones").update(patch).eq("id", z.id);
+    if (err) setError(err.message);
     load();
   };
 
+  const deleteZone = async (z) => {
+    if (!window.confirm(`Excluir o bairro ${z.name}?`)) return;
+    setError("");
+    const { error: err } = await supabase.from("delivery_zones").delete().eq("id", z.id);
+    if (err) setError(err.message);
+    load();
+  };
+
+  const saveMeters = () => {
+    const n = Number(meters);
+    if (!Number.isInteger(n) || n < 50 || n > 5000) { setError("Distância de desvio: de 50 a 5000 metros."); return; }
+    updateCompany({ off_route_meters: n });
+  };
+
+  if (company === false) return <Alert severity="error">{error}</Alert>;
   if (!company) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
 
   return (
     <Box sx={{ maxWidth: 760 }}>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
       {saved && <Alert severity="success" sx={{ mb: 2 }}>{saved}</Alert>}
 
       <Section title="Endereço da loja (ponto de partida)">
@@ -127,8 +267,16 @@ export function DeliverySettingsTab() {
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mt: 2 }}>
           <TextField size="small" type="number" label="Considerar desvio a partir de (metros)" value={meters}
             onChange={(e) => setMeters(e.target.value)} sx={{ width: 300 }} inputProps={{ min: 50, max: 5000 }} />
-          <Button variant="outlined" onClick={() => updateCompany({ off_route_meters: Number(meters) })}>Salvar</Button>
+          <Button variant="outlined" onClick={saveMeters}>Salvar</Button>
         </Box>
+      </Section>
+
+      <Section title="Despacho automático">
+        <AutoDispatch key={`${company.id}-${company.auto_max_stops}-${company.auto_max_detour_km}`} company={company} onSave={updateCompany} />
+      </Section>
+
+      <Section title="Tela da cozinha">
+        <KitchenLink />
       </Section>
 
       <Section title="Taxa do motoboy">
@@ -158,7 +306,7 @@ export function DeliverySettingsTab() {
             <Typography sx={{ fontSize: 13, width: 90 }}>{money(z.fee)}</Typography>
             <Typography sx={{ fontSize: 13, width: 70, color: "#78716C" }}>{z.eta_minutes ? `${z.eta_minutes} min` : "—"}</Typography>
             <Switch size="small" checked={z.active} onChange={(e) => updateZone(z, { active: e.target.checked })} />
-            <IconButton size="small" onClick={async () => { await supabase.from("delivery_zones").delete().eq("id", z.id); load(); }}>
+            <IconButton size="small" aria-label={`Excluir ${z.name}`} onClick={() => deleteZone(z)}>
               <DeleteOutlineIcon fontSize="small" />
             </IconButton>
           </Box>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Box, Typography, Chip, CircularProgress, Button, Dialog, DialogTitle,
-  DialogContent, IconButton,
+  DialogContent, IconButton, Alert,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
@@ -66,6 +66,7 @@ export default function CollaboratorTasks() {
   const [detail, setDetail] = useState(null);
   const [updating, setUpdating] = useState(false);
   const [showSignature, setShowSignature] = useState(false);
+  const [actionError, setActionError] = useState("");
 
   const load = useCallback(async () => {
     const { data } = await supabase
@@ -79,33 +80,43 @@ export default function CollaboratorTasks() {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
+  // Salva a assinatura ANTES de concluir: se ela falhar, a tarefa não é
+  // marcada como concluída e o colaborador vê o erro pra tentar de novo.
+  const saveSignature = async (signatureDataUrl) => {
+    // Converte a assinatura (data URL) num arquivo e sobe pro storage, do
+    // mesmo jeito que as fotos de antes/depois.
+    const blob = await (await fetch(signatureDataUrl)).blob();
+    const path = `${detail.id}/signature-${Date.now()}.png`;
+    const { error: uploadError } = await supabase.storage.from("assignment-photos").upload(path, blob, { contentType: "image/png" });
+    if (uploadError) throw new Error("Não foi possível salvar a assinatura: " + uploadError.message);
+    const { data: signed } = await supabase.storage.from("assignment-photos").createSignedUrl(path, 60 * 60 * 24 * 365);
+    const { error: insertError } = await supabase.from("assignment_photos").insert({
+      assignment_id: detail.id, company_id: profile.company_id, kind: "signature", url: signed?.signedUrl || path, uploaded_by: profile.id,
+    });
+    if (insertError) throw new Error("Não foi possível salvar a assinatura: " + insertError.message);
+  };
+
   const updateStatus = async (newStatus, signatureDataUrl) => {
+    if (updating) return;
     setUpdating(true);
-    const patch = { status: newStatus };
-    if (newStatus === "in_progress") patch.started_at = new Date().toISOString();
-    if (newStatus === "completed") patch.completed_at = new Date().toISOString();
+    setActionError("");
+    try {
+      if (signatureDataUrl) await saveSignature(signatureDataUrl);
 
-    const { data, error } = await supabase.from("assignments").update(patch).eq("id", detail.id).select("*, service:service_id(name, description)").single();
+      const patch = { status: newStatus };
+      if (newStatus === "in_progress") patch.started_at = new Date().toISOString();
+      if (newStatus === "completed") patch.completed_at = new Date().toISOString();
 
-    if (!error && data && signatureDataUrl) {
-      // Converte a assinatura (data URL) num arquivo e sobe pro storage, do
-      // mesmo jeito que as fotos de antes/depois.
-      const blob = await (await fetch(signatureDataUrl)).blob();
-      const path = `${detail.id}/signature-${Date.now()}.png`;
-      const { error: uploadError } = await supabase.storage.from("assignment-photos").upload(path, blob, { contentType: "image/png" });
-      if (!uploadError) {
-        const { data: signed } = await supabase.storage.from("assignment-photos").createSignedUrl(path, 60 * 60 * 24 * 365);
-        await supabase.from("assignment_photos").insert({
-          assignment_id: detail.id, company_id: profile.company_id, kind: "signature", url: signed?.signedUrl || path, uploaded_by: profile.id,
-        });
-      }
-    }
+      const { data, error } = await supabase.from("assignments").update(patch).eq("id", detail.id).select("*, service:service_id(name, description)").single();
+      if (error) throw new Error("Não foi possível atualizar a tarefa: " + error.message);
 
-    setUpdating(false);
-    setShowSignature(false);
-    if (!error && data) {
+      setShowSignature(false);
       setDetail(data);
       setTasks((prev) => prev.map((t) => (t.id === data.id ? data : t)));
+    } catch (err) {
+      setActionError(err?.message || "Falha ao atualizar a tarefa.");
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -136,12 +147,12 @@ export default function CollaboratorTasks() {
         </>
       )}
 
-      <Dialog open={!!detail} onClose={() => { setDetail(null); setShowSignature(false); }} maxWidth="xs" fullWidth>
+      <Dialog open={!!detail} onClose={() => { setDetail(null); setShowSignature(false); setActionError(""); }} maxWidth="xs" fullWidth>
         {detail && (
           <>
             <DialogTitle sx={{ fontWeight: 800, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               {detail.service?.name}
-              <IconButton onClick={() => setDetail(null)} size="small"><CloseIcon fontSize="small" /></IconButton>
+              <IconButton onClick={() => { setDetail(null); setShowSignature(false); setActionError(""); }} size="small"><CloseIcon fontSize="small" /></IconButton>
             </DialogTitle>
             <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pb: 3 }}>
               <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
@@ -186,6 +197,8 @@ export default function CollaboratorTasks() {
 
               {detail.notes && <Typography sx={{ fontSize: 12.5, color: "#78716C", fontStyle: "italic" }}>{detail.notes}</Typography>}
 
+              {actionError && <Alert severity="error" onClose={() => setActionError("")}>{actionError}</Alert>}
+
               {detail.status === "scheduled" && (
                 <Button fullWidth variant="contained" startIcon={<PlayArrowIcon />} disabled={updating} onClick={() => updateStatus("in_progress")}>
                   {updating ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : "Iniciar atendimento"}
@@ -199,10 +212,14 @@ export default function CollaboratorTasks() {
               )}
 
               {detail.status === "in_progress" && showSignature && (
-                <SignaturePad
-                  onConfirm={(dataUrl) => updateStatus("completed", dataUrl)}
-                  onSkip={() => updateStatus("completed", null)}
-                />
+                <>
+                  <SignaturePad
+                    disabled={updating}
+                    onConfirm={(dataUrl) => updateStatus("completed", dataUrl)}
+                    onSkip={() => updateStatus("completed", null)}
+                  />
+                  {updating && <Box sx={{ textAlign: "center" }}><CircularProgress size={20} /></Box>}
+                </>
               )}
             </DialogContent>
           </>

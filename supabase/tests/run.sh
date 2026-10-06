@@ -13,6 +13,8 @@ $PSQL -d "$DB" -f supabase/tests/01_legado_producao.sql >/dev/null
 for i in 1 2; do
   $PSQL -d "$DB" -f supabase-b2b-schema.sql >/dev/null 2>&1 || { echo "Erro aplicando o schema (vez $i):"; $PSQL -d "$DB" -f supabase-b2b-schema.sql; exit 1; }
 done
+# Também como no Supabase, onde "postgres" não é superusuário.
+bash supabase/tests/aplicar_sem_superusuario.sh
 $PSQL -d "$DB" -f supabase/tests/10_seed.sql >/dev/null
 out=""
 for f in supabase/tests/2*.sql; do

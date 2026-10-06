@@ -4,6 +4,8 @@ begin;
 -- Dados montados direto (sem passar pelo app): 3 entregas de C1 hoje,
 -- 1 de C2, 1 cancelado; posições de C1 somando ~2,2 km.
 reset role;
+-- Âncora de horário: perto da meia-noite os dados cairiam no dia anterior (fuso de São Paulo).
+select greatest(now(), ((now() at time zone 'America/Sao_Paulo')::date + time '02:00') at time zone 'America/Sao_Paulo') as t0 \gset
 update companies set courier_daily_rate = 50, courier_per_delivery = 4, courier_per_km = 1
   where id = 'aaaaaaaa-0000-0000-0000-000000000000';
 insert into delivery_zones (company_id, name, fee, eta_minutes) values
@@ -11,22 +13,22 @@ insert into delivery_zones (company_id, name, fee, eta_minutes) values
 insert into delivery_orders (company_id, customer_name, address_neighborhood, zone_id, subtotal, delivery_fee, payment_method,
                              status, courier_id, created_at, ready_at, dispatched_at, delivered_at, delivered_by_code) values
  ('aaaaaaaa-0000-0000-0000-000000000000','A','Centro',:'zona',30,5,'dinheiro','delivered','00000000-0000-0000-0000-0000000000c1',
-   now()-interval '90 min', now()-interval '80 min', now()-interval '70 min', now()-interval '60 min', true),
+   (:'t0'::timestamptz)-interval '90 min', (:'t0'::timestamptz)-interval '80 min', (:'t0'::timestamptz)-interval '70 min', (:'t0'::timestamptz)-interval '60 min', true),
  ('aaaaaaaa-0000-0000-0000-000000000000','B','Centro',:'zona',20,5,'pix','delivered','00000000-0000-0000-0000-0000000000c1',
-   now()-interval '40 min', now()-interval '35 min', now()-interval '30 min', now()-interval '20 min', true),
+   (:'t0'::timestamptz)-interval '40 min', (:'t0'::timestamptz)-interval '35 min', (:'t0'::timestamptz)-interval '30 min', (:'t0'::timestamptz)-interval '20 min', true),
  ('aaaaaaaa-0000-0000-0000-000000000000','C','Vila',null,10,null,'cartao','delivered','00000000-0000-0000-0000-0000000000c1',
-   now()-interval '30 min', null, now()-interval '20 min', now()-interval '10 min', false),
+   (:'t0'::timestamptz)-interval '30 min', null, (:'t0'::timestamptz)-interval '20 min', (:'t0'::timestamptz)-interval '10 min', false),
  ('aaaaaaaa-0000-0000-0000-000000000000','D','Vila',null,15,3,'dinheiro','delivered','00000000-0000-0000-0000-0000000000c2',
-   now()-interval '30 min', null, now()-interval '20 min', now()-interval '10 min', true),
- ('aaaaaaaa-0000-0000-0000-000000000000','E','Vila',null,99,0,'pix','cancelled',null, now()-interval '5 min', null, null, null, null);
+   (:'t0'::timestamptz)-interval '30 min', null, (:'t0'::timestamptz)-interval '20 min', (:'t0'::timestamptz)-interval '10 min', true),
+ ('aaaaaaaa-0000-0000-0000-000000000000','E','Vila',null,99,0,'pix','cancelled',null, (:'t0'::timestamptz)-interval '5 min', null, null, null, null);
 update delivery_orders set forced_reason = 'cliente sem código' where customer_name = 'C';
 select id as pedido_a from delivery_orders where customer_name = 'A' \gset
 insert into location_pings (company_id, courier_id, lat, lng, recorded_at) values
- ('aaaaaaaa-0000-0000-0000-000000000000','00000000-0000-0000-0000-0000000000c1', -23.5500, -46.6300, now()-interval '50 min'),
- ('aaaaaaaa-0000-0000-0000-000000000000','00000000-0000-0000-0000-0000000000c1', -23.5590, -46.6300, now()-interval '45 min'),
- ('aaaaaaaa-0000-0000-0000-000000000000','00000000-0000-0000-0000-0000000000c1', -23.5590, -46.6400, now()-interval '40 min'),
+ ('aaaaaaaa-0000-0000-0000-000000000000','00000000-0000-0000-0000-0000000000c1', -23.5500, -46.6300, (:'t0'::timestamptz)-interval '50 min'),
+ ('aaaaaaaa-0000-0000-0000-000000000000','00000000-0000-0000-0000-0000000000c1', -23.5590, -46.6300, (:'t0'::timestamptz)-interval '45 min'),
+ ('aaaaaaaa-0000-0000-0000-000000000000','00000000-0000-0000-0000-0000000000c1', -23.5590, -46.6400, (:'t0'::timestamptz)-interval '40 min'),
  -- salto de GPS (≈ 50 km): ignorado
- ('aaaaaaaa-0000-0000-0000-000000000000','00000000-0000-0000-0000-0000000000c1', -23.1000, -46.6400, now()-interval '39 min');
+ ('aaaaaaaa-0000-0000-0000-000000000000','00000000-0000-0000-0000-0000000000c1', -23.1000, -46.6400, (:'t0'::timestamptz)-interval '39 min');
 
 -- ---------- Relatório financeiro ----------
 select tests.as_user('00000000-0000-0000-0000-0000000000a1');

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Box, TextField, IconButton, Typography, CircularProgress, Popover } from "@mui/material";
+import { Box, TextField, IconButton, Typography, CircularProgress, Popover, Button } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import EmojiEmotionsOutlinedIcon from "@mui/icons-material/EmojiEmotionsOutlined";
 import supabase from "../services/supabase";
@@ -26,10 +26,16 @@ function formatTime(iso) {
 // persistidas no banco (a "cópia de segurança" real depende da política de
 // backup do seu projeto Supabase — ver README).
 export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
-  const { profile, isCompanyAdmin } = useAuth();
+  const { profile, isCompanyAdmin, isSupervisor } = useAuth();
+  // Admin e supervisor ficam do mesmo lado da conversa (o "lado da empresa").
+  const isStaff = isCompanyAdmin || isSupervisor;
   const [roomKey, setRoomKey] = useState(null);
   const [messages, setMessages] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [senderNames, setSenderNames] = useState({});
+  // Quem recebe push: colaborador + admins (supervisores só aparecem com nome).
+  const [pushRecipients, setPushRecipients] = useState([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [emojiAnchor, setEmojiAnchor] = useState(null);
@@ -51,32 +57,37 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMessages(null);
+    setLoadError(false);
     let channel = null;
 
     (async () => {
+     try {
       const key = await getOrCreateRoomKey(collaboratorId, companyId);
       if (cancelled) return;
       setRoomKey(key);
 
-      const [{ data: rows }, { data: people }] = await Promise.all([
+      const [{ data: rows, error: rowsError }, { data: people }] = await Promise.all([
         supabase.from("chat_messages").select("*").eq("collaborator_id", collaboratorId).order("created_at", { ascending: true }).limit(200),
-        supabase.from("profiles").select("id, name")
-          .or(`id.eq.${collaboratorId},and(company_id.eq.${companyId},company_role.eq.company_admin)`),
+        supabase.from("profiles").select("id, name, company_role")
+          .or(`id.eq.${collaboratorId},and(company_id.eq.${companyId},company_role.in.(company_admin,supervisor))`),
       ]);
       if (cancelled) return;
+      if (rowsError) throw rowsError;
 
       const names = {};
       (people || []).forEach((p) => { names[p.id] = p.name; });
       setSenderNames(names);
+      setPushRecipients((people || []).filter((p) => p.id === collaboratorId || p.company_role === "company_admin").map((p) => p.id));
 
       await decryptAndSet(rows || [], key);
       if (cancelled) return;
 
       // Marca como lidas as mensagens que faltavam pro papel de quem está vendo.
-      const unreadField = isCompanyAdmin ? "read_by_admin" : "read_by_collaborator";
+      const unreadField = isStaff ? "read_by_admin" : "read_by_collaborator";
       const unreadIds = (rows || []).filter((m) => !m[unreadField]).map((m) => m.id);
       if (unreadIds.length > 0) {
-        supabase.from("chat_messages").update({ [unreadField]: true }).in("id", unreadIds);
+        // O builder do supabase só envia ao ser "aguardado": sem o then, nada era gravado.
+        supabase.from("chat_messages").update({ [unreadField]: true }).in("id", unreadIds).then(() => {});
       }
 
       // Só assina tempo real DEPOIS do histórico já estar na tela — evita
@@ -92,14 +103,18 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
             return [...(prev || []), { ...payload.new, text }];
           });
           if (payload.new.sender_id !== profile.id) {
-            supabase.from("chat_messages").update({ [unreadField]: true }).eq("id", payload.new.id);
+            supabase.from("chat_messages").update({ [unreadField]: true }).eq("id", payload.new.id).then(() => {});
           }
         })
         .subscribe();
+     } catch (err) {
+      console.warn("Falha ao abrir a conversa:", err?.message || err);
+      if (!cancelled) setLoadError(true);
+     }
     })();
 
     return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
-  }, [collaboratorId, companyId, isCompanyAdmin, profile.id, decryptAndSet]);
+  }, [collaboratorId, companyId, isStaff, profile.id, decryptAndSet, reloadKey]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -111,12 +126,17 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
     setSending(true);
     setInput("");
 
-    const { ciphertext, iv } = await encryptMessage(text, roomKey);
-    const { error } = await supabase.from("chat_messages").insert({
-      company_id: companyId, collaborator_id: collaboratorId, sender_id: profile.id,
-      ciphertext, iv,
-      read_by_admin: isCompanyAdmin, read_by_collaborator: !isCompanyAdmin,
-    });
+    let error;
+    try {
+      const { ciphertext, iv } = await encryptMessage(text, roomKey);
+      ({ error } = await supabase.from("chat_messages").insert({
+        company_id: companyId, collaborator_id: collaboratorId, sender_id: profile.id,
+        ciphertext, iv,
+        read_by_admin: isStaff, read_by_collaborator: !isStaff,
+      }));
+    } catch (e) {
+      error = e;
+    }
     setSending(false);
     if (error) {
       console.warn("Falha ao enviar mensagem:", error.message);
@@ -128,7 +148,7 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
     // trava o envio se isso falhar (função não publicada ainda, por
     // exemplo); é só um "melhor esforço" por cima da notificação interna,
     // que já foi criada pelo gatilho no banco de qualquer forma.
-    Object.keys(senderNames)
+    pushRecipients
       .filter((id) => id !== profile.id)
       .forEach((recipientId) => {
         supabase.functions.invoke("send-push", {
@@ -151,7 +171,14 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
       )}
 
       <Box sx={{ flex: 1, overflowY: "auto", p: 2, display: "flex", flexDirection: "column", gap: 1 }}>
-        {messages === null ? (
+        {loadError ? (
+          <Box sx={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1 }}>
+            <Typography sx={{ color: "#78716C", fontSize: 13 }}>Não foi possível abrir a conversa.</Typography>
+            <Button size="small" variant="outlined" onClick={() => setReloadKey((k) => k + 1)} sx={{ textTransform: "none", fontWeight: 700 }}>
+              Tentar de novo
+            </Button>
+          </Box>
+        ) : messages === null ? (
           <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}><CircularProgress size={22} /></Box>
         ) : messages.length === 0 ? (
           <Typography sx={{ textAlign: "center", color: "#A8A29E", fontSize: 13, my: "auto" }}>
@@ -195,7 +222,7 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
           multiline maxRows={4}
         />
-        <IconButton onClick={handleSend} disabled={!input.trim() || sending} sx={{ color: "#1C1917" }}>
+        <IconButton onClick={handleSend} disabled={!input.trim() || sending || !roomKey || loadError} sx={{ color: "#1C1917" }}>
           <SendIcon sx={{ fontSize: 20 }} />
         </IconButton>
       </Box>

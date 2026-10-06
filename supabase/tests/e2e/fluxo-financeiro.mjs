@@ -130,8 +130,20 @@ await page.getByText('Vagas usadas', { exact: true }).waitFor();
 log('uso de licenças:', (await page.getByRole('row').filter({ hasText: 'Empresa A' }).innerText()).replace(/\s+/g, ' '));
 await page.screenshot({ path: `${SHOTS}/25-plataforma-uso.png`, fullPage: true });
 
-// ---------------- Admin: abas do financeiro; celular ----------------
+// ---------------- Empresa suspensa vê o aviso; depois volta a ativa ----------------
+const suspensa = sql(`select status from companies where name = 'Empresa A'`) === 'suspended';
 await login(page, 'a1@t');
+if (suspensa) {
+  await page.getByText('Acesso suspenso').waitFor();
+  log('empresa suspensa vê o aviso:', true);
+  await page.screenshot({ path: `${SHOTS}/26-empresa-suspensa.png` });
+  sql(`update companies set status = 'active' where name = 'Empresa A'`);
+  await page.goto(APP + '/login');
+  await page.evaluate(() => localStorage.clear());
+  await login(page, 'a1@t');
+}
+
+// ---------------- Admin: abas do financeiro; celular ----------------
 await page.setViewportSize({ width: 390, height: 844 });
 await page.getByText('Financeiro', { exact: true }).first().click();
 await page.getByText('Caixa do dia', { exact: true }).waitFor();

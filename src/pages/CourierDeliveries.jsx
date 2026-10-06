@@ -84,8 +84,8 @@ function FitBounds({ points }) {
   const key = points.map((p) => p.join(",")).join("|");
   useEffect(() => {
     const t = setTimeout(() => map.invalidateSize(), 200);
-    if (points.length >= 2) map.fitBounds(points, { padding: [30, 30] });
-    else if (points.length === 1) map.setView(points[0], 15);
+    if (points.length >= 2) map.fitBounds(points, { padding: [30, 30], animate: false });
+    else if (points.length === 1) map.setView(points[0], 15, { animate: false });
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, map]);
@@ -106,6 +106,66 @@ function useWakeLock(active) {
   }, [active]);
 }
 
+// Expediente: com ele aberto (e sem pausa) o motoboy recebe as saídas do
+// despacho automático. Pausar devolve a saída ainda não iniciada.
+function ShiftBar({ shift, unavailable, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  if (shift === undefined && unavailable) {
+    // Sem o expediente o motoboy não recebe saídas automáticas: avisa em vez de sumir com o botão.
+    return (
+      <Alert severity="warning" sx={{ mb: 2 }}
+        action={<Button size="small" color="inherit" onClick={onChange}>Tentar de novo</Button>}>
+        Não foi possível carregar o expediente. Se continuar, avise o gestor: o banco de dados pode estar desatualizado.
+      </Alert>
+    );
+  }
+  if (shift === undefined) return null;
+  const run = async (fn) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await fn();
+      if (error) onError(error.message.includes("function") ? "Expediente indisponível: o banco ainda não foi atualizado." : error.message);
+    } catch {
+      onError("Sem conexão. Confira a internet e tente de novo.");
+    } finally {
+      setBusy(false);
+    }
+    onChange();
+  };
+  const since = shift ? new Date(shift.started_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+  const on = shift && !shift.paused;
+  return (
+    <Box sx={{ p: 1.5, mb: 2, borderRadius: "12px", border: "1px solid", borderColor: on ? "#C9CDEB" : shift ? "#E9D9BF" : "#E7E5E4",
+      background: on ? "#EEF0FA" : shift ? "#FBF3EA" : "#fff" }}>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
+        <Box>
+          <Typography sx={{ fontSize: 13.5, fontWeight: 700, color: on ? "#4F5BA6" : shift ? "#B0793D" : "#57534E" }}>
+            {!shift ? "Fora do expediente" : shift.paused ? "Em pausa: não recebe novas saídas" : `Em expediente desde ${since}`}
+          </Typography>
+          {shift?.paused && shift.paused_reason && <Typography sx={{ fontSize: 11.5, color: "#78716C" }}>{shift.paused_reason}</Typography>}
+          {on && <Typography sx={{ fontSize: 11.5, color: "#78716C" }}>As saídas chegam sozinhas quando você estiver livre.</Typography>}
+        </Box>
+        <Box sx={{ display: "flex", gap: 1 }}>
+          {shift && (
+            <Button size="small" variant={shift.paused ? "contained" : "outlined"} disabled={busy}
+              onClick={() => run(() => supabase.rpc("set_shift_paused", { p_paused: !shift.paused }))}>
+              {shift.paused ? "Voltar a receber" : "Pausar"}
+            </Button>
+          )}
+          <Button size="small" variant={shift ? "outlined" : "contained"} color={shift ? "error" : "primary"} disabled={busy}
+            onClick={() => {
+              if (shift && !window.confirm("Encerrar o expediente? Você para de receber saídas e a saída ainda não iniciada volta para a fila.")) return;
+              run(() => supabase.rpc(shift ? "end_shift" : "start_shift"));
+            }}>
+            {shift ? "Encerrar expediente" : "Iniciar expediente"}
+          </Button>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
 export default function CourierDeliveries() {
   const { profile } = useAuth();
   const [runs, setRuns] = useState(null);
@@ -120,18 +180,26 @@ export default function CourierDeliveries() {
   const [showProblem, setShowProblem] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [shift, setShift] = useState(undefined);
+  const [shiftUnavailable, setShiftUnavailable] = useState(false);
   const lastPing = useRef(0);
   const routeFrom = useRef(null);
   const offRef = useRef(false);
 
   const load = useCallback(async () => {
-    const [r, c] = await Promise.all([
+    const [r, c, s] = await Promise.all([
       supabase.from("delivery_runs").select("*, orders:delivery_orders(*)").eq("courier_id", profile.id)
         .in("status", ["planned", "in_progress"]).order("created_at"),
       supabase.rpc("my_company_settings").maybeSingle(),
+      supabase.from("courier_shifts").select("id, started_at, paused, paused_reason").eq("courier_id", profile.id).is("ended_at", null).maybeSingle(),
     ]);
+    // Falha de rede: mantém o expediente que já estava na tela.
+    if (!s.error) setShift(s.data || null);
+    setShiftUnavailable(Boolean(s.error));
+    if (c.data) setCompany(c.data);
+    // Falha: mantém a saída que já estava na tela; a próxima recarga tenta de novo.
+    if (r.error) { setRuns((prev) => prev ?? []); return; }
     setRuns((r.data || []).map((run) => ({ ...run, orders: (run.orders || []).sort((a, b) => a.stop_sequence - b.stop_sequence) })));
-    setCompany(c.data);
   }, [profile.id]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -141,8 +209,10 @@ export default function CourierDeliveries() {
     const channel = supabase.channel(`courier-${profile.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_runs", filter: `courier_id=eq.${profile.id}` }, () => load())
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_orders", filter: `courier_id=eq.${profile.id}` }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "courier_shifts", filter: `courier_id=eq.${profile.id}` }, () => load())
       .subscribe();
-    const interval = setInterval(load, 30000);
+    // Rede de segurança do despacho automático (o banco também despacha sozinho).
+    const interval = setInterval(() => { supabase.rpc("auto_dispatch_tick").then(() => load()); }, 30000);
     return () => { clearInterval(interval); supabase.removeChannel(channel); };
   }, [profile.id, load]);
 
@@ -161,7 +231,7 @@ export default function CourierDeliveries() {
   const [legOrigin, setLegOrigin] = useState(null);
 
   // ── GPS ────────────────────────────────────────────────────────────────
-  const gpsOn = Boolean(runs?.length);
+  const gpsOn = Boolean(runs?.length || shift);
   useEffect(() => {
     if (!gpsOn) return;
     if (!window.isSecureContext || !navigator.geolocation) {
@@ -177,10 +247,10 @@ export default function CourierDeliveries() {
     return () => navigator.geolocation.clearWatch(id);
   }, [gpsOn]);
 
-  // Envia posição (última posição + histórico) durante a saída; o km do
-  // acerto vem desse histórico.
+  // Envia posição (última posição + histórico) durante a saída e o
+  // expediente; o km do acerto vem desse histórico.
   useEffect(() => {
-    if (!activeRun || !myPos) return;
+    if ((!activeRun && !shift) || !myPos) return;
     const now = Date.now();
     if (now - lastPing.current < PING_INTERVAL_MS) return;
     lastPing.current = now;
@@ -190,7 +260,7 @@ export default function CourierDeliveries() {
       company_id: profile.company_id, courier_id: profile.id, run_id: activeRun?.id ?? null,
       lat: myPos.lat, lng: myPos.lng, accuracy: myPos.accuracy, speed: myPos.speed, off_route: offRef.current,
     }).then(() => {});
-  }, [myPos, activeRun, profile.id, profile.company_id]);
+  }, [myPos, activeRun, shift, profile.id, profile.company_id]);
 
   // ── 3 opções de rota até a parada atual ─────────────────────────────────
   // A rota é calculada uma vez por parada (a partir de onde o motoboy está
@@ -203,11 +273,17 @@ export default function CourierDeliveries() {
     if (!origin) return;
     const key = `${currentStop.id}:${recalc}`;
     if (routeFrom.current?.key === key) return;
+    const stopChanged = routeFrom.current?.key?.split(":")[0] !== String(currentStop.id);
     routeFrom.current = { key };
+    // Parada nova: some com a rota antiga (senão acusaria desvio da rota errada).
+    if (stopChanged) setOptions([]);
     fetchRouteOptions(origin, currentStop).then((opts) => {
+      if (routeFrom.current?.key !== key) return; // já mudou de parada
+      // Sem rota (sem internet): libera para tentar de novo na próxima posição.
+      if (!opts?.length) routeFrom.current = null;
       setLegOrigin(origin);
-      setOptions(opts);
-      setChoice(strict ? 0 : Math.min(currentStop.route_choice ?? 0, Math.max(opts.length - 1, 0)));
+      setOptions(opts || []);
+      setChoice(strict ? 0 : Math.min(currentStop.route_choice ?? 0, Math.max((opts?.length || 1) - 1, 0)));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStop, myPos, strict, recalc, prevStop?.id, store?.lat, store?.lng]);
@@ -235,9 +311,16 @@ export default function CourierDeliveries() {
   };
 
   const call = async (fn, okMsg) => {
+    if (busy) return null;
     setBusy(true); setMsg(null);
-    const { data, error } = await fn();
-    setBusy(false);
+    let data, error;
+    try {
+      ({ data, error } = await fn());
+    } catch {
+      error = { message: "Sem conexão. Confira a internet e tente de novo." };
+    } finally {
+      setBusy(false);
+    }
     if (error) { setMsg({ type: "error", text: error.message }); return null; }
     if (okMsg) setMsg({ type: "success", text: okMsg });
     load();
@@ -270,16 +353,20 @@ export default function CourierDeliveries() {
   return (
     <AppShell title="Minhas entregas">
       <CollaboratorNav />
+      <ShiftBar shift={shift} unavailable={shiftUnavailable} onChange={load} onError={(text) => setMsg({ type: "error", text })} />
       {msg && <Alert severity={msg.type} sx={{ mb: 2 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       {geoError && <Alert severity="warning" sx={{ mb: 2 }}>{geoError}</Alert>}
 
       {!activeRun && !plannedRun && (
-        <Box sx={{ py: 8, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>Nenhuma entrega no momento. Você será avisado quando chegar uma saída.</Box>
+        <Box sx={{ py: 8, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>{shift && !shift.paused ? "Aguardando pedidos. A próxima saída aparece aqui sozinha." : "Nenhuma entrega no momento. Você será avisado quando chegar uma saída."}</Box>
       )}
 
       {plannedRun && (
         <Box>
           <Typography sx={{ fontWeight: 800, fontSize: 17, mb: 1 }}>Nova saída: {plannedRun.orders.length} parada(s)</Typography>
+          {plannedRun.auto && (
+            <Alert severity="info" sx={{ mb: 1 }}>Saída montada automaticamente. Inicie logo: se demorar, ela passa para outro motoboy.</Alert>
+          )}
           <RunOverview store={store} orders={plannedRun.orders} />
           {plannedRun.orders.map((o) => (
             <Box key={o.id} sx={{ p: 1.5, mb: 1, border: "1px solid #E7E5E4", borderRadius: "12px", background: "#fff" }}>
@@ -288,8 +375,8 @@ export default function CourierDeliveries() {
             </Box>
           ))}
           <Button fullWidth variant="contained" size="large" startIcon={<PlayArrowIcon />} sx={{ mt: 1, py: 1.4 }} disabled={busy}
-            onClick={() => call(() => supabase.rpc("start_run", { p_run: plannedRun.id }), "Saída iniciada. Boa entrega!")}>
-            Iniciar saída
+            onClick={() => call(() => supabase.rpc("start_run", { p_run: plannedRun.id }), "Saída confirmada: pedidos em rota. Boa entrega!")}>
+            Confirmar saída para entrega
           </Button>
         </Box>
       )}

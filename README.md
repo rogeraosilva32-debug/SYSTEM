@@ -125,16 +125,14 @@ necessidade — não existe "a" API de CRM, cada sistema tem a sua:
 Ajuste essas duas partes do arquivo depois de olhar a documentação do CRM
 real que vocês forem integrar.
 
-## 6. Chaves e integrações de pagamento — presentes, documentadas, não conectadas
+## 6. Chaves e integrações de pagamento — não conectadas
 
-`services/assas.js` e `hooks/usePaymentReturn.js` (integração com Asaas e
-Mercado Pago) continuam no projeto e as chaves seguem no `.env`, como
-pedido — mas não há mais nenhuma tela usando isso, porque o modelo B2B
-ainda não define como a cobrança da licença ou dos serviços deveria
-funcionar (cobrança da licença em si? Repasse por serviço concluído?
-Isso é uma decisão de produto, não técnica, e por isso ficou de fora desta
-reconstrução). Quando essa decisão existir, a integração já está no
-projeto pra ser religada.
+O código antigo de pagamento no navegador (`services/assas.js` e
+`hooks/usePaymentReturn.js`, Asaas e Mercado Pago) foi removido: nenhuma
+tela usava, e o `usePaymentReturn` marcava pedidos como pagos a partir de
+parâmetros da URL, sem confirmação do provedor. Quando o modelo de cobrança
+for definido, a integração deve ser refeita no servidor (Edge Function +
+webhook do provedor), nunca confiando no retorno pelo navegador.
 
 ⚠️ Como sempre: essas chaves no `.env` são de produção e ficam visíveis no
 bundle público (prefixo `VITE_`). Rotacione antes de expor o projeto de
@@ -572,3 +570,83 @@ Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.
   Desliga em "Entregas: ajustes".
 - **Cardápio inicial**: `supabase/seeds/cardapio-pantera-lanches.sql` (rodar
   depois do schema; ajuste o nome da empresa na primeira linha do bloco).
+
+## 31. Expediente e despacho automático
+
+- **Expediente** (app do motoboy): "Iniciar expediente", "Pausar" / "Voltar a
+  receber" e "Encerrar expediente". O gestor vê quem está em expediente na
+  fila de pedidos e pode pausar, liberar ou encerrar.
+- **Despacho automático** ("Entregas: ajustes"): quando um motoboy em
+  expediente fica livre, o banco (`auto_dispatch`) monta a saída começando
+  pelo pedido que espera há mais tempo e junta os que ficam no caminho
+  (inserção mais barata no trajeto loja → paradas → loja), respeitando o
+  máximo de entregas e o desvio máximo da empresa. Não enche até o máximo:
+  só junta o que compensa.
+- **Ligado por padrão** (desde 06/10/2026): empresas novas e as que já
+  existiam (uma única vez, marcado em `schema_flags`). Com ele ligado a fila
+  não mostra o "Despachar" manual; mostra um aviso quando não há motoboy em
+  expediente. Para montar saídas à mão, desligue nos ajustes.
+- **Quando roda**: pedido fica pronto (ou chega, se configurado), saída
+  termina, motoboy entra/volta do expediente, ajustes mudam; e a cada minuto
+  pelo pg_cron (se disponível) e a cada 30 s pelas telas abertas.
+- **Falhas cobertas**: um despacho por empresa por vez (trava), erro no
+  despacho nunca bloqueia a ação do motoboy/gestor, saída não iniciada no
+  prazo volta para a fila e o motoboy fica em pausa, pausar/encerrar devolve
+  a saída ainda não iniciada.
+
+## 32. Pedido local (balcão) x entrega
+
+- **Novo pedido** começa escolhendo "Entrega" ou "Pedido local". Na entrega
+  aparecem endereço, mapa, complemento e taxa de entrega (endereço com ponto
+  no mapa continua obrigatório). No pedido local só aparecem os campos do
+  pedido; nome e telefone são opcionais.
+- **No banco**: `delivery_orders.order_type` ('delivery' | 'local'). Pedido
+  local nunca tem endereço, taxa de entrega nem código de entrega, não entra
+  em saída (manual ou automática) e o tipo não muda depois de criado.
+- **Concluir**: no detalhe do pedido local, "Entregue ao cliente"
+  (`complete_local_order`, admin ou supervisor). O pagamento já fica
+  conferido, porque foi feito no caixa. No financeiro aparece como
+  "Pedido local" no lugar do bairro, e não entra nos tempos de entrega.
+
+## 33. Novo pedido em etapas
+
+- O formulário de novo pedido é dividido em etapas, uma por tipo de
+  informação: **Cliente** (entrega ou local, telefone, nome) → **Endereço**
+  (só na entrega) → **Itens** (cardápio e carrinho) → **Pagamento** (forma,
+  troco, taxa, origem, observações e resumo). Cada etapa é validada antes de
+  avançar; o rodapé mostra quantos itens e o total. No celular abre em tela
+  cheia.
+
+## 34. Modo cozinha (tela cheia)
+
+- **Abrir**: botão "Modo cozinha" na aba Pedidos (gestor logado), ou pelo
+  link próprio da tela em **Entregas: ajustes → Tela da cozinha** (abre sem
+  login, ideal para uma TV). "Trocar link" invalida o anterior.
+- **O que mostra**: pedidos recebidos e em preparo, do mais antigo para o mais
+  novo, com itens, opções, adicionais em destaque e observações; tempo de
+  espera colorido; faixa "PRONTOS" embaixo. Não mostra telefone, endereço nem
+  valores.
+- **Ajustes da tela** (salvos no próprio aparelho): 3, 4 ou 5 pedidos por
+  tela; fixo (mostra os mais antigos e "+ N na fila") ou alternando as páginas
+  por tempo; botões "Iniciar preparo"/"Pronto"; aviso sonoro de pedido novo.
+- **No banco**: tabela `kitchen_displays` (token de 64 caracteres) e funções
+  `kitchen_display_token`, `kitchen_board`, `kitchen_advance`.
+
+## 35. Segurança — revisão 2 (06/10/2026)
+
+- Visitante sem login só executa as funções das páginas públicas (avaliação e
+  cozinha); funções novas nascem fechadas para anônimos.
+- Checagens de "quem chama" não falham mais quando não há usuário (remover
+  colaborador, mudar cargo, turno, acerto, alerta de desvio).
+- Empresa suspensa perde o acesso aos dados (o painel mostra "Acesso
+  suspenso"), mas continua vendo as próprias faturas.
+- Chave de licença e convite não trocam a empresa de quem já tem uma; licença
+  já ativada não é usada de novo; vagas contam colaboradores e supervisores.
+- Notificações só pelo servidor; mensagens do chat não podem ser alteradas
+  (só marcadas como lidas); designações, folgas e fotos ficam presas à
+  empresa; pedido encerrado não muda valores; o próprio usuário não altera
+  saldo/papéis antigos do perfil; posição do motoboy grava a hora do servidor.
+- Link de avaliação ficou numa tabela separada (`assignment_rating_tokens`),
+  que o motoboy não lê, e a nota só é gravada pela página do cliente.
+- Logo da marca só PNG, JPEG ou WebP; importação do CRM só em https público e
+  não "rouba" contas de outra empresa; códigos gerados com `crypto`.

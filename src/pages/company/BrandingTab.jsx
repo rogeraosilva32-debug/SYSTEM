@@ -4,7 +4,7 @@ import UploadFileOutlinedIcon from "@mui/icons-material/UploadFileOutlined";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { refreshCompanySettings } from "../../hooks/useCompanySettings";
-import { BRAND_SLOTS, checkBrandImage } from "../../utils/branding";
+import { BRAND_SLOTS, checkBrandImage, brandAccept } from "../../utils/branding";
 
 function SlotCard({ slot, value, companyId, onSaved }) {
   const [preview, setPreview] = useState(null);
@@ -24,8 +24,9 @@ function SlotCard({ slot, value, companyId, onSaved }) {
   };
 
   const save = async () => {
+    const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" }[file.type];
+    if (!ext) { setCheck({ error: `Formato inválido. Use ${slot.typesLabel}.` }); return; }
     setBusy(true);
-    const ext = { "image/png": "png", "image/svg+xml": "svg", "image/jpeg": "jpg", "image/webp": "webp" }[file.type];
     const path = `${companyId}/${slot.file}-${Date.now()}.${ext}`;
     const { error: upErr } = await supabase.storage.from("company-branding").upload(path, file, { contentType: file.type, upsert: true });
     if (upErr) { setBusy(false); setCheck({ error: upErr.message }); return; }
@@ -65,7 +66,7 @@ function SlotCard({ slot, value, companyId, onSaved }) {
       <Box sx={{ display: "flex", gap: 1 }}>
         <Button component="label" variant="outlined" startIcon={<UploadFileOutlinedIcon />} size="small">
           Escolher arquivo
-          <input hidden type="file" accept={slot.types.join(",")} onChange={pick} />
+          <input hidden type="file" accept={brandAccept(slot)} onChange={pick} />
         </Button>
         {file && <Button variant="contained" size="small" onClick={save} disabled={busy}>{busy ? <CircularProgress size={16} sx={{ color: "#fff" }} /> : "Salvar"}</Button>}
         {!file && value && <Button size="small" color="error" onClick={remove}>Remover</Button>}

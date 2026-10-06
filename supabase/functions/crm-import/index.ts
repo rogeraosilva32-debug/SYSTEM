@@ -49,9 +49,45 @@ function mapFields(rawItem: Record<string, unknown>, mapping: Record<string, str
   return out;
 }
 
+// Bloqueia SSRF: só aceita https para hosts públicos (nada de localhost,
+// IPs privados/loopback/link-local ou domínios .internal/.local).
+function isPrivateIPv4(host: string) {
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || (a === 169 && b === 254);
+}
+
+function isPrivateIPv6(host: string) {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!h.includes(":")) return null;
+  if (h === "::1" || h === "::") return true;
+  if (/^f[cd][0-9a-f]{0,2}:/.test(h)) return true; // fc00::/7
+  if (/^fe[89ab][0-9a-f]?:/.test(h)) return true; // fe80::/10 (link-local)
+  const mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/); // IPv4 mapeado
+  if (mapped) return isPrivateIPv4(mapped[1]) ?? true;
+  return false;
+}
+
+function validateBaseUrl(baseUrl: string): string | null {
+  let url: URL;
+  try { url = new URL(baseUrl); } catch { return "URL do CRM inválida."; }
+  if (url.protocol !== "https:") return "A URL do CRM precisa usar https.";
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) {
+    return "Endereço do CRM não permitido.";
+  }
+  if (isPrivateIPv4(host) || isPrivateIPv6(host)) return "Endereço do CRM não permitido.";
+  return null;
+}
+
 async function fetchFromCrm(baseUrl: string, apiKey: string, path: string) {
+  const invalid = validateBaseUrl(baseUrl);
+  if (invalid) throw new Error(invalid);
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
     headers: { Authorization: `Bearer ${apiKey}` }, // ajuste aqui se o CRM usar outro esquema
+    redirect: "error", // não segue redirecionamentos (poderiam apontar pra rede interna)
   });
   if (!res.ok) throw new Error(`CRM respondeu ${res.status} em ${path}`);
   return res.json();
@@ -87,6 +123,8 @@ Deno.serve(async (req) => {
     if (!integration?.base_url || !integration?.api_key) {
       return jsonResponse({ ok: false, message: "Configure e salve a URL e a chave do CRM antes de testar/importar." }, 200);
     }
+    const invalidUrl = validateBaseUrl(integration.base_url);
+    if (invalidUrl) return jsonResponse({ ok: false, message: invalidUrl }, 200);
 
     if (mode === "test") {
       try {
@@ -131,7 +169,7 @@ Deno.serve(async (req) => {
 
     // --- Colaboradores --------------------------------------------------
     try {
-      const { count: currentSeats } = await admin.from("profiles").select("id", { count: "exact", head: true }).eq("company_id", company_id).eq("company_role", "collaborator");
+      const { count: currentSeats } = await admin.from("profiles").select("id", { count: "exact", head: true }).eq("company_id", company_id).in("company_role", ["collaborator", "supervisor"]);
       const { data: company } = await admin.from("companies").select("seats_limit").eq("id", company_id).single();
       let seatsLeft = (company?.seats_limit || 0) - (currentSeats || 0);
 
@@ -143,9 +181,19 @@ Deno.serve(async (req) => {
         const mapped = mapFields(raw, mapping.collaborators);
         if (!mapped.email) continue;
 
-        const { data: existingProfile } = await admin.from("profiles").select("id").eq("email", mapped.email).maybeSingle();
+        const { data: existingProfile } = await admin.from("profiles").select("id, company_id, is_platform_admin").eq("email", mapped.email).maybeSingle();
         if (existingProfile) {
-          await admin.from("profiles").update({ company_id, company_role: "collaborator", name: mapped.name, phone: mapped.phone }).eq("id", existingProfile.id);
+          // Só vincula perfis sem empresa; nunca mexe em quem já pertence a
+          // outra (ou a esta) empresa nem em administradores da plataforma.
+          if (existingProfile.is_platform_admin) { warnings.push(`${mapped.email}: conta não pode ser vinculada`); continue; }
+          if (existingProfile.company_id) {
+            if (existingProfile.company_id !== company_id) warnings.push(`${mapped.email}: já pertence a outra empresa`);
+            continue;
+          }
+          const { error: updError } = await admin.from("profiles")
+            .update({ company_id, company_role: "collaborator", name: mapped.name, phone: mapped.phone })
+            .eq("id", existingProfile.id).is("company_id", null);
+          if (updError) { warnings.push(`${mapped.email}: ${updError.message}`); continue; }
         } else {
           // Cria um usuário de autenticação novo (sem senha definida — a
           // pessoa usa "esqueci minha senha" no primeiro acesso pra criar a dela).

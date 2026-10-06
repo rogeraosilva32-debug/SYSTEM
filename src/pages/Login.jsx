@@ -37,9 +37,14 @@ export default function Login() {
       if (signInError) { setError(signInError.message); return; }
       navigate("/", { replace: true });
     } else {
-      const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
+      // O nome vai também no user_metadata: com confirmação de e-mail ligada
+      // não há sessão aqui, o upsert abaixo falha e o perfil é criado depois
+      // (AuthContext) a partir desse nome.
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email, password, options: { data: { name: name.trim() } },
+      });
       if (signUpError) { setLoading(false); setError(signUpError.message); return; }
-      if (data.user) {
+      if (data.user && data.session) {
         await supabase.from("profiles").upsert(
           { id: data.user.id, email: data.user.email, name: name.trim() },
           { onConflict: "id" }
