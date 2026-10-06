@@ -102,6 +102,23 @@ await c2.reload();
 await c2.getByText(/Nova saída: 2 parada/).waitFor({ timeout: 15000 });
 check('motoboy vê a saída com as 2 paradas', true);
 
+// ───────── Gestor edita a saída antes da confirmação ─────────
+await admin.reload();
+await admin.getByText('EM EXPEDIENTE', { exact: true }).waitFor();
+await admin.getByText('Aguardando o motoboy confirmar a saída').locator('..').getByRole('button', { name: 'Editar' }).click();
+await admin.getByRole('dialog').getByText('Editar saída').waitFor();
+await admin.getByLabel('Motoboy').click();
+check('motoboy ocupado aparece indisponível', await admin.getByRole('option', { name: /C1 · com outra saída/ }).getAttribute('aria-disabled') === 'true');
+await admin.keyboard.press('Escape');
+const dlg = admin.getByRole('dialog');
+await dlg.locator('div').filter({ hasText: 'Davi Rocha' }).filter({ has: admin.getByRole('button', { name: 'Tirar da saída' }) }).last()
+  .getByRole('button', { name: 'Tirar da saída' }).click();
+await admin.getByRole('button', { name: 'Salvar saída' }).click();
+await admin.getByRole('dialog').waitFor({ state: 'detached' });
+check('pedido tirado volta para a fila', sql(`select run_id is null from delivery_orders where customer_name = 'Davi Rocha'`) === 't');
+check('saída editada fica com o gestor', sql(`select locked from delivery_runs where courier_id = '00000000-0000-0000-0000-0000000000c2' and status = 'planned'`) === 't');
+await admin.screenshot({ path: `${SHOTS}/54-saida-editada.png`, fullPage: true });
+
 console.log('\nERROS:', errors.length ? errors : 'nenhum');
 await browser.close();
 process.exit(errors.length ? 1 : 0);

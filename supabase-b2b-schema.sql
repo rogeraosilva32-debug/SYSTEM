@@ -2996,6 +2996,8 @@ end $$;
 alter table public.courier_shifts add column if not exists paused boolean not null default false;
 alter table public.courier_shifts add column if not exists paused_reason text;
 alter table public.delivery_runs add column if not exists auto boolean not null default false;
+-- Saída mexida pelo gestor: o despacho automático não junta pedidos nela.
+alter table public.delivery_runs add column if not exists locked boolean not null default false;
 
 -- Distância em linha reta (km).
 create or replace function public.geo_km(lat1 double precision, lng1 double precision,
@@ -3154,7 +3156,7 @@ begin
   -- 2) Saída automática ainda não confirmada pelo motoboy e abaixo do máximo:
   --    os pedidos que ficaram prontos depois entram nela (rota refeita).
   for r in select dr.id, dr.courier_id from public.delivery_runs dr
-           where dr.company_id = p_company and dr.auto and dr.status = 'planned'
+           where dr.company_id = p_company and dr.auto and dr.status = 'planned' and not dr.locked
              and (select count(*) from public.delivery_orders o where o.run_id = dr.id) between 1 and c.auto_max_stops - 1
              and exists (select 1 from public.courier_shifts s
                          where s.courier_id = dr.courier_id and s.ended_at is null and not s.paused)
@@ -4041,6 +4043,96 @@ end;
 $$;
 revoke execute on function public.kitchen_advance(uuid, text) from public;
 grant execute on function public.kitchen_advance(uuid, text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- Editar saída antes de o motoboy confirmar (06/10/2026): o gestor muda
+-- paradas e ordem ou passa a saída para outro motoboy disponível.
+-- ---------------------------------------------------------------------
+create or replace function public.update_run(p_run uuid, p_order_ids uuid[], p_courier uuid default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  v_run record;
+  v_old uuid;
+  v_seq int := 0;
+  v_id uuid;
+begin
+  if not public.is_order_manager() then raise exception 'Sem permissão.'; end if;
+  select * into v_run from public.delivery_runs where id = p_run and company_id = public.my_company_id() for update;
+  if v_run.id is null or v_run.status in ('finished', 'cancelled') then
+    raise exception 'Saída não encontrada ou já encerrada.';
+  end if;
+  if exists (select 1 from unnest(coalesce(p_order_ids, '{}')) x group by x having count(*) > 1) then
+    raise exception 'Pedido repetido na saída.';
+  end if;
+  v_old := v_run.courier_id;
+
+  -- Daqui em diante a saída é do gestor: o despacho automático não mexe nela.
+  update public.delivery_runs set locked = true where id = p_run;
+
+  if p_courier is not null and p_courier is distinct from v_run.courier_id then
+    perform public.check_courier(p_courier);
+    if exists (select 1 from public.delivery_runs dr
+               where dr.courier_id = p_courier and dr.id <> p_run and dr.status in ('planned', 'in_progress')) then
+      raise exception 'Este motoboy já está com outra saída.';
+    end if;
+    -- Novo motoboy ganha o prazo inteiro para confirmar a saída.
+    update public.delivery_runs set courier_id = p_courier,
+      created_at = case when status = 'planned' then now() else created_at end where id = p_run;
+    v_run.courier_id := p_courier;
+  end if;
+
+  -- Tira da saída o que não está mais na lista (e não foi entregue).
+  update public.delivery_orders
+    set run_id = null, courier_id = null, stop_sequence = null, courier_fee = null,
+        status = case when status in ('on_route', 'problem') then 'ready' else status end,
+        dispatched_at = null
+    where run_id = p_run and status not in ('delivered', 'cancelled')
+      and not (id = any(coalesce(p_order_ids, '{}')));
+
+  -- Entregues ficam primeiro, na ordem em que foram entregues.
+  for v_id in select id from public.delivery_orders where run_id = p_run and status = 'delivered' order by delivered_at loop
+    v_seq := v_seq + 1;
+    update public.delivery_orders set stop_sequence = v_seq where id = v_id;
+  end loop;
+
+  foreach v_id in array coalesce(p_order_ids, '{}') loop
+    if exists (select 1 from public.delivery_orders where id = v_id and status = 'delivered' and run_id = p_run) then
+      continue;
+    end if;
+    if not exists (select 1 from public.delivery_orders where id = v_id and company_id = v_run.company_id
+                   and order_type = 'delivery'
+                   and status in ('received', 'preparing', 'ready', 'on_route', 'problem')
+                   and (run_id is null or run_id = p_run)) then
+      raise exception 'Pedido indisponível para esta saída.';
+    end if;
+    v_seq := v_seq + 1;
+    update public.delivery_orders set run_id = p_run, courier_id = v_run.courier_id, stop_sequence = v_seq,
+      courier_fee = public.courier_order_fee(v_run.courier_id),
+      status = case when v_run.status = 'in_progress' then 'on_route' else status end,
+      dispatched_at = case when v_run.status = 'in_progress' then coalesce(dispatched_at, now()) else dispatched_at end
+      where id = v_id;
+  end loop;
+
+  if v_seq = 0 then
+    update public.delivery_runs set status = 'cancelled', finished_at = now() where id = p_run;
+  else
+    perform public.maybe_finish_run(p_run);
+  end if;
+
+  -- Avisos de troca de motoboy.
+  if v_old is distinct from v_run.courier_id then
+    insert into public.notifications (company_id, user_id, type, title, message)
+      values (v_run.company_id, v_old, 'run_reassigned', 'Saída passada para outro motoboy',
+              'O gestor passou a sua saída para outro motoboy.');
+    if v_seq > 0 then
+      insert into public.notifications (company_id, user_id, type, title, message)
+        values (v_run.company_id, v_run.courier_id, 'new_run', 'Nova saída de entrega',
+                v_seq || ' parada(s) aguardando você.');
+    end if;
+  end if;
+end;
+$$;
+grant execute on function public.update_run(uuid, uuid[], uuid) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).

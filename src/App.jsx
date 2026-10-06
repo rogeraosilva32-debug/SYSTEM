@@ -6,6 +6,7 @@ import { AnimatePresence } from "framer-motion";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import RoleRoute, { homeForCurrentUser } from "./components/RoleRoute";
+import { passwordRecovery } from "./services/supabase";
 import PageTransition from "./components/PageTransition";
 
 import Welcome from "./pages/Welcome";
@@ -28,6 +29,8 @@ function RootRoute() {
   const auth = useAuth();
   const { user, loading } = auth;
   if (loading) return null;
+  // Link de convite/recuperação que caiu na página inicial: primeiro cria a senha.
+  if (user && (passwordRecovery.fromUrl || passwordRecovery.event)) return <Navigate to="/reset-password" replace />;
   if (!user) return <Navigate to="/welcome" replace />;
   return <Navigate to={homeForCurrentUser(auth)} replace />;
 }
