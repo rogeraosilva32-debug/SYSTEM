@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Box, Typography, Button, CircularProgress, Alert, Table, TableHead, TableRow, TableCell, TableBody,
 } from "@mui/material";
@@ -35,16 +35,26 @@ export function ReportsTab({ companyId = null }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
+  const req = useRef(0);
+
   const load = useCallback(async () => {
+    const my = ++req.current;
     setLoading(true);
     setError("");
     const args = { p_from: range[0], p_to: range[1], p_company: companyId };
-    const [f, p] = await Promise.all([
-      supabase.rpc("report_financial", args),
-      supabase.rpc("report_productivity", args),
-    ]);
+    let f, p;
+    try {
+      [f, p] = await Promise.all([
+        supabase.rpc("report_financial", args),
+        supabase.rpc("report_productivity", args),
+      ]);
+    } catch (e) {
+      f = { error: e };
+    }
+    // Trocou o período antes de responder: descarta a resposta antiga.
+    if (my !== req.current) return;
     setLoading(false);
-    if (f.error || p.error) { setError((f.error || p.error).message); return; }
+    if (f.error || p?.error) { setError((f.error || p.error).message); setFin(null); setProd(null); return; }
     setFin(f.data);
     setProd(p.data);
   }, [range, companyId]);

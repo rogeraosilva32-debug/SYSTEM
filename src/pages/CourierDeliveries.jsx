@@ -112,10 +112,16 @@ function ShiftBar({ shift, onChange, onError }) {
   const [busy, setBusy] = useState(false);
   if (shift === undefined) return null;
   const run = async (fn) => {
+    if (busy) return;
     setBusy(true);
-    const { error } = await fn();
-    setBusy(false);
-    if (error) onError(error.message.includes("function") ? "Expediente indisponível: o banco ainda não foi atualizado." : error.message);
+    try {
+      const { error } = await fn();
+      if (error) onError(error.message.includes("function") ? "Expediente indisponível: o banco ainda não foi atualizado." : error.message);
+    } catch {
+      onError("Sem conexão. Confira a internet e tente de novo.");
+    } finally {
+      setBusy(false);
+    }
     onChange();
   };
   const since = shift ? new Date(shift.started_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
@@ -139,7 +145,10 @@ function ShiftBar({ shift, onChange, onError }) {
             </Button>
           )}
           <Button size="small" variant={shift ? "outlined" : "contained"} color={shift ? "error" : "primary"} disabled={busy}
-            onClick={() => run(() => supabase.rpc(shift ? "end_shift" : "start_shift"))}>
+            onClick={() => {
+              if (shift && !window.confirm("Encerrar o expediente? Você para de receber saídas e a saída ainda não iniciada volta para a fila.")) return;
+              run(() => supabase.rpc(shift ? "end_shift" : "start_shift"));
+            }}>
             {shift ? "Encerrar expediente" : "Iniciar expediente"}
           </Button>
         </Box>
@@ -174,9 +183,12 @@ export default function CourierDeliveries() {
       supabase.rpc("my_company_settings").maybeSingle(),
       supabase.from("courier_shifts").select("id, started_at, paused, paused_reason").eq("courier_id", profile.id).is("ended_at", null).maybeSingle(),
     ]);
-    setShift(s.error ? undefined : s.data || null);
+    // Falha de rede: mantém o expediente que já estava na tela.
+    if (!s.error) setShift(s.data || null);
+    if (c.data) setCompany(c.data);
+    // Falha: mantém a saída que já estava na tela; a próxima recarga tenta de novo.
+    if (r.error) { setRuns((prev) => prev ?? []); return; }
     setRuns((r.data || []).map((run) => ({ ...run, orders: (run.orders || []).sort((a, b) => a.stop_sequence - b.stop_sequence) })));
-    setCompany(c.data);
   }, [profile.id]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -250,11 +262,17 @@ export default function CourierDeliveries() {
     if (!origin) return;
     const key = `${currentStop.id}:${recalc}`;
     if (routeFrom.current?.key === key) return;
+    const stopChanged = routeFrom.current?.key?.split(":")[0] !== String(currentStop.id);
     routeFrom.current = { key };
+    // Parada nova: some com a rota antiga (senão acusaria desvio da rota errada).
+    if (stopChanged) setOptions([]);
     fetchRouteOptions(origin, currentStop).then((opts) => {
+      if (routeFrom.current?.key !== key) return; // já mudou de parada
+      // Sem rota (sem internet): libera para tentar de novo na próxima posição.
+      if (!opts?.length) routeFrom.current = null;
       setLegOrigin(origin);
-      setOptions(opts);
-      setChoice(strict ? 0 : Math.min(currentStop.route_choice ?? 0, Math.max(opts.length - 1, 0)));
+      setOptions(opts || []);
+      setChoice(strict ? 0 : Math.min(currentStop.route_choice ?? 0, Math.max((opts?.length || 1) - 1, 0)));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStop, myPos, strict, recalc, prevStop?.id, store?.lat, store?.lng]);
@@ -282,9 +300,16 @@ export default function CourierDeliveries() {
   };
 
   const call = async (fn, okMsg) => {
+    if (busy) return null;
     setBusy(true); setMsg(null);
-    const { data, error } = await fn();
-    setBusy(false);
+    let data, error;
+    try {
+      ({ data, error } = await fn());
+    } catch {
+      error = { message: "Sem conexão. Confira a internet e tente de novo." };
+    } finally {
+      setBusy(false);
+    }
     if (error) { setMsg({ type: "error", text: error.message }); return null; }
     if (okMsg) setMsg({ type: "success", text: okMsg });
     load();

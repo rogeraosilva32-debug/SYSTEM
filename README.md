@@ -591,3 +591,17 @@ Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.
   despacho nunca bloqueia a ação do motoboy/gestor, saída não iniciada no
   prazo volta para a fila e o motoboy fica em pausa, pausar/encerrar devolve
   a saída ainda não iniciada.
+
+## 32. Pedido local (balcão) x entrega
+
+- **Novo pedido** começa escolhendo "Entrega" ou "Pedido local". Na entrega
+  aparecem endereço, mapa, complemento e taxa de entrega (endereço com ponto
+  no mapa continua obrigatório). No pedido local só aparecem os campos do
+  pedido; nome e telefone são opcionais.
+- **No banco**: `delivery_orders.order_type` ('delivery' | 'local'). Pedido
+  local nunca tem endereço, taxa de entrega nem código de entrega, não entra
+  em saída (manual ou automática) e o tipo não muda depois de criado.
+- **Concluir**: no detalhe do pedido local, "Entregue ao cliente"
+  (`complete_local_order`, admin ou supervisor). O pagamento já fica
+  conferido, porque foi feito no caixa. No financeiro aparece como
+  "Pedido local" no lugar do bairro, e não entra nos tempos de entrega.

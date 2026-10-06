@@ -24,6 +24,22 @@ function Section({ title, action, children }) {
   );
 }
 
+// Grava a nova ordem; uma reordenação por vez (cliques rápidos seriam
+// gravados por cima de uma lista velha) e avisa se alguma linha falhar.
+let reordering = false;
+async function saveOrder(table, rows, start) {
+  if (reordering) return null;
+  reordering = true;
+  try {
+    const res = await Promise.all(rows.map((r, j) => supabase.from(table).update({ sort_order: j + start }).eq("id", r.id)));
+    return res.find((r) => r.error)?.error || null;
+  } catch (e) {
+    return e;
+  } finally {
+    reordering = false;
+  }
+}
+
 function priceLabel(p) {
   if (!p.variants?.length) return money(p.price);
   return p.variants.map((v) => `${v.name}: ${money(v.price)}`).join(" · ");
@@ -78,6 +94,10 @@ function ProductDialog({ open, onClose, onSaved, editing, kind, categories, comp
         if (!v.name.trim()) { setError("Toda opção precisa de nome."); return; }
         if (parsePrice(v.price) == null || parsePrice(v.price) < 0) { setError(`Informe o preço de "${v.name}".`); return; }
       }
+      if (new Set(list.map((v) => v.name.trim().toLowerCase())).size !== list.length) {
+        setError("Há opções com o mesmo nome. Use nomes diferentes (ex.: Pequeno, Grande).");
+        return;
+      }
       row.variants = list.map((v) => ({ name: v.name.trim(), price: parsePrice(v.price) }));
     } else {
       const p = parsePrice(price);
@@ -85,12 +105,19 @@ function ProductDialog({ open, onClose, onSaved, editing, kind, categories, comp
       row.price = p;
       row.variants = [];
     }
+    if (saving) return;
     setSaving(true);
-    const { error: err } = editing
-      ? await supabase.from("products").update(row).eq("id", editing.id)
-      : await supabase.from("products").insert(row);
-    setSaving(false);
-    if (err) { setError(err.message); return; }
+    let err;
+    try {
+      ({ error: err } = editing
+        ? await supabase.from("products").update(row).eq("id", editing.id)
+        : await supabase.from("products").insert(row));
+    } catch (e) {
+      err = e;
+    } finally {
+      setSaving(false);
+    }
+    if (err) { setError(err.message || "Falha de conexão. Tente de novo."); return; }
     onSaved();
     onClose();
   };
@@ -178,7 +205,8 @@ function Categories({ categories, products, companyId, onChanged, setError }) {
   const move = async (i, d) => {
     const list = [...categories];
     [list[i], list[i + d]] = [list[i + d], list[i]];
-    await Promise.all(list.map((c, j) => supabase.from("product_categories").update({ sort_order: j + 1 }).eq("id", c.id)));
+    const err = await saveOrder("product_categories", list, 1);
+    if (err) setError(err.message || "Não foi possível salvar a nova ordem.");
     onChanged();
   };
 
@@ -274,7 +302,8 @@ export function MenuTab() {
   const moveProduct = async (list, i, d) => {
     const next = [...list];
     [next[i], next[i + d]] = [next[i + d], next[i]];
-    await Promise.all(next.map((p, j) => supabase.from("products").update({ sort_order: j }).eq("id", p.id)));
+    const err = await saveOrder("products", next, 0);
+    if (err) setError(err.message || "Não foi possível salvar a nova ordem.");
     load();
   };
 

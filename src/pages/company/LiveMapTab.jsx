@@ -15,11 +15,14 @@ const storeIcon = new L.DivIcon({
 });
 const PLAN_COLORS = ["#B0793D", "#4A6C8C", "#4B7A5E", "#8C4A7A", "#B0463D"];
 
+// O nome vem do perfil do motoboy: escapa antes de virar HTML do marcador.
+const escapeHtml = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 const courierIcon = (label, active) => new L.DivIcon({
   className: "",
   html: `<div style="display:flex;align-items:center;gap:4px;transform:translate(-8px,-8px)">
     <div style="flex-shrink:0;width:16px;height:16px;border-radius:50%;background:${active ? "#4F5BA6" : "#A8A29E"};border:3px solid #fff;box-shadow:0 0 6px rgba(0,0,0,.3)"></div>
-    <div style="background:#fff;border:1px solid #E7E5E4;border-radius:8px;padding:1px 6px;font:700 11px sans-serif;white-space:nowrap">${label}</div>
+    <div style="background:#fff;border:1px solid #E7E5E4;border-radius:8px;padding:1px 6px;font:700 11px sans-serif;white-space:nowrap">${escapeHtml(label)}</div>
   </div>`,
   iconSize: [0, 0],
 });
@@ -61,10 +64,12 @@ export function LiveMapTab() {
     setRuns(r.data || []);
     const ids = (r.data || []).map((x) => x.id);
     if (ids.length) {
+      // Mais recentes primeiro (o servidor limita a quantidade de linhas):
+      // o trecho cortado, se houver, é o começo do trajeto.
       const { data } = await supabase.from("location_pings").select("run_id, lat, lng, recorded_at")
-        .in("run_id", ids).order("recorded_at").limit(5000);
+        .in("run_id", ids).order("recorded_at", { ascending: false }).limit(1000);
       const byRun = {};
-      for (const p of data || []) (byRun[p.run_id] ||= []).push([p.lat, p.lng]);
+      for (const p of (data || []).slice().reverse()) (byRun[p.run_id] ||= []).push([p.lat, p.lng]);
       setTrails(byRun);
     } else {
       setTrails({});

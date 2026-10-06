@@ -1,3 +1,4 @@
+import ErrorBoundary from "./components/ErrorBoundary";
 import { lazy, Suspense } from "react";
 import { useLocation } from "react-router-dom";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
@@ -37,6 +38,7 @@ function AnimatedApp() {
     <AnimatePresence mode="wait">
       <PageTransition routeKey={location.pathname}>
         <Suspense fallback={null}>
+          <ErrorBoundary key={location.pathname}>
           <Routes location={location}>
             <Route path="/" element={<RootRoute />} />
             <Route path="/welcome" element={<Welcome />} />
@@ -56,6 +58,7 @@ function AnimatedApp() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </ErrorBoundary>
         </Suspense>
       </PageTransition>
     </AnimatePresence>

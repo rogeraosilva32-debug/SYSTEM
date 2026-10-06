@@ -1401,6 +1401,9 @@ create table if not exists public.delivery_orders (
   delivered_at timestamptz,
   unique (company_id, number)
 );
+-- Entrega (sai com motoboy) ou pedido local (balcão: retirada/consumo na loja).
+alter table public.delivery_orders add column if not exists order_type text not null default 'delivery'
+  check (order_type in ('delivery', 'local'));
 create index if not exists delivery_orders_company_status_idx on public.delivery_orders(company_id, status, created_at desc);
 create index if not exists delivery_orders_run_idx on public.delivery_orders(run_id, stop_sequence);
 create index if not exists delivery_orders_courier_idx on public.delivery_orders(courier_id, status);
@@ -1431,6 +1434,14 @@ declare
 begin
   update public.companies set next_order_number = next_order_number + 1
     where id = new.company_id returning next_order_number - 1 into new.number;
+
+  -- Pedido local (balcão): sem endereço, bairro, taxa de entrega nem rota.
+  if new.order_type = 'local' then
+    new.address_street := null; new.address_number := null; new.address_complement := null;
+    new.address_neighborhood := null; new.address_city := null;
+    new.lat := null; new.lng := null; new.zone_id := null; new.delivery_fee := null;
+    return new;
+  end if;
 
   if new.zone_id is null and new.address_neighborhood is not null then
     select id into new.zone_id from public.delivery_zones
@@ -1500,6 +1511,10 @@ begin
      or new.courier_fee is distinct from old.courier_fee then
     raise exception 'Use as funções de despacho/entrega para alterar estes campos.';
   end if;
+  if new.order_type is distinct from old.order_type then
+    raise exception 'O tipo do pedido (entrega ou local) não muda depois de criado.';
+  end if;
+  if new.order_type = 'local' then new.delivery_fee := null; end if;
   -- Pedido com produtos: o valor dos itens vem do cardápio (set_order_items).
   if new.subtotal is distinct from old.subtotal
      and exists (select 1 from public.delivery_order_items i where i.order_id = old.id) then
@@ -1548,6 +1563,7 @@ create policy order_delivery_codes_managers on public.order_delivery_codes
 create or replace function public.delivery_orders_after_insert()
 returns trigger language plpgsql security definer as $$
 begin
+  if new.order_type = 'local' then return new; end if;
   insert into public.order_delivery_codes (order_id, company_id, code)
   values (new.id, new.company_id, lpad((floor(random() * 10000))::int::text, 4, '0'))
   on conflict (order_id) do nothing;
@@ -1612,7 +1628,10 @@ begin
   if coalesce(array_length(p_order_ids, 1), 0) = 0 then raise exception 'Escolha ao menos um pedido.'; end if;
   perform public.check_courier(p_courier);
 
-  if (select count(*) from public.delivery_orders o
+  if exists (select 1 from public.delivery_orders o where o.id = any(p_order_ids) and o.order_type = 'local') then
+    raise exception 'Pedido local não sai com motoboy.';
+  end if;
+  if (select count(distinct o.id) from public.delivery_orders o
       where o.id = any(p_order_ids) and o.company_id = v_company
         and o.status in ('received', 'preparing', 'ready') and o.run_id is null)
      <> array_length(p_order_ids, 1) then
@@ -1677,6 +1696,7 @@ begin
       continue;
     end if;
     if not exists (select 1 from public.delivery_orders where id = v_id and company_id = v_run.company_id
+                   and order_type = 'delivery'
                    and status in ('received', 'preparing', 'ready', 'on_route', 'problem')
                    and (run_id is null or run_id = p_run)) then
       raise exception 'Pedido indisponível para esta saída.';
@@ -2491,7 +2511,8 @@ begin
           select coalesce(payment_method, 'nao_informado') as key, count(*) as count, sum(total) as total
           from d group by 1) x), '[]'::jsonb),
       'by_neighborhood', coalesce((select jsonb_agg(x order by x.total desc) from (
-          select coalesce(nullif(btrim(address_neighborhood), ''), 'Sem bairro') as key, count(*) as count,
+          select case when order_type = 'local' then 'Pedido local'
+                      else coalesce(nullif(btrim(address_neighborhood), ''), 'Sem bairro') end as key, count(*) as count,
                  sum(total) as total, sum(coalesce(delivery_fee, 0) + coalesce(courier_fee, 0)) as fees
           from d group by 1) x), '[]'::jsonb),
       'by_source', coalesce((select jsonb_agg(x order by x.count desc) from (
@@ -2530,7 +2551,7 @@ begin
           'total_min', round(avg(extract(epoch from delivered_at - created_at) / 60)::numeric, 1),
           'late', count(*) filter (where eta_minutes is not null and delivered_at > created_at + make_interval(mins => eta_minutes)),
           'with_eta', count(*) filter (where eta_minutes is not null))
-        from o where status = 'delivered'),
+        from o where status = 'delivered' and order_type = 'delivery'),
       'couriers', coalesce((select jsonb_agg(x order by x.deliveries desc, x.name) from (
           select p.id, p.name,
             (select count(*) from o where o.courier_id = p.id and o.status = 'delivered') as deliveries,
@@ -3039,6 +3060,7 @@ begin
                    case when c.auto_dispatch_when = 'ready' then coalesce(x.ready_at, x.created_at) else x.created_at end as since
             from public.delivery_orders x
             where x.company_id = p_company and x.run_id is null and x.lat is not null and x.lng is not null
+              and x.order_type = 'delivery'
               and x.status in ('received', 'preparing', 'ready')
               and (c.auto_dispatch_when = 'any' or x.status = 'ready')) o;
     exit when cid is null;
@@ -3145,6 +3167,7 @@ $$;
 drop trigger if exists trg_auto_dispatch_orders on public.delivery_orders;
 create trigger trg_auto_dispatch_orders after update on public.delivery_orders
   for each row when (new.run_id is null and new.status in ('received', 'preparing', 'ready')
+                     and new.order_type = 'delivery'
                      and (old.status is distinct from new.status or old.run_id is not null))
   execute function public.auto_dispatch_kick();
 drop trigger if exists trg_auto_dispatch_runs on public.delivery_runs;
@@ -3175,32 +3198,47 @@ create trigger trg_auto_dispatch_company after update on public.companies
   execute function public.auto_dispatch_kick_company();
 
 -- Pedido criado pelo app entra na fila automática na hora.
+-- Entrega precisa do nome do cliente; pedido local (balcão) não tem endereço
+-- nem taxa de entrega e nunca vai para motoboy.
 create or replace function public.create_delivery_order(p_order jsonb, p_items jsonb)
 returns uuid language plpgsql as $$
-declare v_id uuid;
+declare
+  v_id uuid;
+  v_type text := coalesce(nullif(p_order->>'order_type', ''), 'delivery');
+  v_local boolean;
+  v_name text := nullif(btrim(p_order->>'customer_name'), '');
 begin
+  if v_type not in ('delivery', 'local') then raise exception 'Tipo de pedido inválido.'; end if;
+  v_local := v_type = 'local';
   if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
     raise exception 'Adicione ao menos um produto ao pedido.';
   end if;
+  if v_name is null then
+    if not v_local then raise exception 'Informe o nome do cliente.'; end if;
+    v_name := 'Cliente no balcão';
+  end if;
   insert into public.delivery_orders (
-    company_id, source, customer_id, customer_name, customer_phone,
+    company_id, order_type, source, customer_id, customer_name, customer_phone,
     address_street, address_number, address_complement, address_neighborhood, address_city, lat, lng,
     delivery_fee, payment_method, change_for, notes)
   values (
-    public.my_company_id(), coalesce(nullif(p_order->>'source', ''), 'balcao'),
-    nullif(p_order->>'customer_id', '')::uuid, btrim(p_order->>'customer_name'), nullif(p_order->>'customer_phone', ''),
+    public.my_company_id(), v_type, coalesce(nullif(p_order->>'source', ''), 'balcao'),
+    nullif(p_order->>'customer_id', '')::uuid, v_name, nullif(p_order->>'customer_phone', ''),
     nullif(p_order->>'address_street', ''), nullif(p_order->>'address_number', ''), nullif(p_order->>'address_complement', ''),
     nullif(p_order->>'address_neighborhood', ''), nullif(p_order->>'address_city', ''),
     nullif(p_order->>'lat', '')::double precision, nullif(p_order->>'lng', '')::double precision,
-    nullif(p_order->>'delivery_fee', '')::numeric, nullif(p_order->>'payment_method', ''),
+    case when v_local then null else nullif(p_order->>'delivery_fee', '')::numeric end,
+    nullif(p_order->>'payment_method', ''),
     nullif(p_order->>'change_for', '')::numeric, nullif(p_order->>'notes', ''))
   returning id into v_id;
   perform public.set_order_items(v_id, p_items);
-  begin
-    perform public.auto_dispatch_tick();
-  exception when others then
-    raise warning 'Despacho automático falhou: %', sqlerrm;
-  end;
+  if not v_local then
+    begin
+      perform public.auto_dispatch_tick();
+    exception when others then
+      raise warning 'Despacho automático falhou: %', sqlerrm;
+    end;
+  end if;
   return v_id;
 end;
 $$;
@@ -3271,6 +3309,26 @@ begin
     end;
   end if;
 end $$;
+
+-- ---------------------------------------------------------------------
+-- Pedido local (balcão): o gestor conclui ao entregar ao cliente na loja.
+-- O pagamento foi feito no caixa, então já fica conferido.
+-- ---------------------------------------------------------------------
+create or replace function public.complete_local_order(p_order_id uuid)
+returns void language plpgsql security definer as $$
+declare v_order record;
+begin
+  if not public.is_order_manager() then raise exception 'Sem permissão.'; end if;
+  update public.delivery_orders
+    set status = 'delivered', delivered_at = now(), ready_at = coalesce(ready_at, now()),
+        payment_received = true, payment_received_at = now(), payment_received_by = auth.uid()
+    where id = p_order_id and company_id = public.my_company_id() and order_type = 'local'
+      and status in ('received', 'preparing', 'ready')
+    returning * into v_order;
+  if v_order.id is null then raise exception 'Pedido local não encontrado ou já encerrado.'; end if;
+end;
+$$;
+grant execute on function public.complete_local_order(uuid) to authenticated;
 
 -- Atualiza o cache do Supabase (evita "Could not find the column ... in the schema cache").
 notify pgrst, 'reload schema';

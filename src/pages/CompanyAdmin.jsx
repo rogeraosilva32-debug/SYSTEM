@@ -1,3 +1,4 @@
+import ErrorBoundary from "../components/ErrorBoundary";
 import { useState } from "react";
 import { Box } from "@mui/material";
 import AppShell from "../components/AppShell";
@@ -56,19 +57,21 @@ export default function CompanyAdmin() {
         ))}
       </Box>
 
-      {tab === "orders" && <OrdersTab />}
-      {tab === "menu" && <MenuTab />}
-      {tab === "live" && <LiveMapTab />}
-      {tab === "reports" && <ReportsTab />}
-      {tab === "finance" && <FinanceTab />}
-      {tab === "delivery" && <DeliverySettingsTab />}
-      {tab === "collaborators" && <CollaboratorsTab />}
-      {tab === "services" && <ServicesTab />}
-      {tab === "assignments" && <AssignmentsTab />}
-      {tab === "messages" && <MessagesTab />}
-      {tab === "integrations" && <IntegrationsTab />}
-      {tab === "branding" && <BrandingTab />}
-      {tab === "audit" && <AuditLogViewer companyId={companyId} />}
+      <ErrorBoundary inline key={tab}>
+        {tab === "orders" && <OrdersTab />}
+        {tab === "menu" && <MenuTab />}
+        {tab === "live" && <LiveMapTab />}
+        {tab === "reports" && <ReportsTab />}
+        {tab === "finance" && <FinanceTab />}
+        {tab === "delivery" && <DeliverySettingsTab />}
+        {tab === "collaborators" && <CollaboratorsTab />}
+        {tab === "services" && <ServicesTab />}
+        {tab === "assignments" && <AssignmentsTab />}
+        {tab === "messages" && <MessagesTab />}
+        {tab === "integrations" && <IntegrationsTab />}
+        {tab === "branding" && <BrandingTab />}
+        {tab === "audit" && <AuditLogViewer companyId={companyId} />}
+      </ErrorBoundary>
     </AppShell>
   );
 }

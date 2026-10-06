@@ -21,6 +21,16 @@ export default class ErrorBoundary extends Component {
     // Fica só no console por enquanto — se um serviço de monitoramento de
     // erros (Sentry ou similar) for adicionado no futuro, é aqui que entra.
     console.error("Erro não tratado capturado pelo ErrorBoundary:", error, info?.componentStack);
+    // Depois de uma nova versão no ar, a tela aberta pode pedir um arquivo
+    // que não existe mais: recarrega uma vez sozinho para pegar a versão nova.
+    if (/Loading chunk|dynamically imported module|Importing a module script failed/i.test(error?.message || "")) {
+      try {
+        if (!sessionStorage.getItem("chunk-reload")) {
+          sessionStorage.setItem("chunk-reload", "1");
+          window.location.reload();
+        }
+      } catch { /* sem sessionStorage: mostra a tela de erro */ }
+    }
   }
 
   handleReload = () => {
@@ -28,6 +38,23 @@ export default class ErrorBoundary extends Component {
   };
 
   render() {
+    // `inline`: erro numa aba mostra o aviso só ali; o resto do painel continua.
+    if (this.state.error && this.props.inline) {
+      return (
+        <div style={{ padding: 24, border: "1px solid #E7E5E4", borderRadius: 14, background: "#fff", textAlign: "center" }}>
+          <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 6 }}>Esta parte encontrou um erro</div>
+          <div style={{ fontSize: 13, color: "#78716C", marginBottom: 14 }}>As outras abas continuam funcionando.</div>
+          <button onClick={() => this.setState({ error: null })}
+            style={{ background: "#1C1917", color: "#fff", border: "none", borderRadius: 10, padding: "8px 18px", fontWeight: 700, cursor: "pointer", marginRight: 8 }}>
+            Tentar de novo
+          </button>
+          <button onClick={this.handleReload}
+            style={{ background: "#fff", color: "#1C1917", border: "1px solid #D6D3D1", borderRadius: 10, padding: "8px 18px", fontWeight: 700, cursor: "pointer" }}>
+            Recarregar
+          </button>
+        </div>
+      );
+    }
     if (this.state.error) {
       return (
         <div style={{

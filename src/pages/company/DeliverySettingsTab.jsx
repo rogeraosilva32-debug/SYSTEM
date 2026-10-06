@@ -5,7 +5,7 @@ import {
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
-import { money } from "../../utils/delivery";
+import { money, parsePrice } from "../../utils/delivery";
 import DeliveryAddressField from "../../components/DeliveryAddressField";
 import { refreshCompanySettings } from "../../hooks/useCompanySettings";
 
@@ -46,15 +46,30 @@ function AutoDispatch({ company, onSave }) {
     auto_hold_minutes: company.auto_hold_minutes ?? 0, auto_accept_minutes: company.auto_accept_minutes ?? 5,
     auto_dispatch_when: company.auto_dispatch_when || "ready",
   });
+  const [invalid, setInvalid] = useState("");
   if (company.auto_dispatch === undefined) {
     return <Alert severity="warning">Rode de novo o supabase-b2b-schema.sql no Supabase para liberar o despacho automático.</Alert>;
   }
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-  const save = () => onSave({
-    auto_max_stops: Number(form.auto_max_stops), auto_max_detour_km: Number(String(form.auto_max_detour_km).replace(",", ".")),
-    auto_hold_minutes: Number(form.auto_hold_minutes), auto_accept_minutes: Number(form.auto_accept_minutes),
-    auto_dispatch_when: form.auto_dispatch_when,
-  });
+  const save = () => {
+    const int = (v, min, max) => {
+      const n = String(v).trim() === "" ? NaN : Number(v);
+      return Number.isInteger(n) && n >= min && n <= max ? n : null;
+    };
+    const values = {
+      auto_max_stops: int(form.auto_max_stops, 1, 20),
+      auto_max_detour_km: parsePrice(form.auto_max_detour_km),
+      auto_hold_minutes: int(form.auto_hold_minutes, 0, 30),
+      auto_accept_minutes: int(form.auto_accept_minutes, 0, 60),
+      auto_dispatch_when: form.auto_dispatch_when,
+    };
+    if (values.auto_max_stops == null) { setInvalid("Máximo de entregas: de 1 a 20."); return; }
+    if (values.auto_max_detour_km == null || values.auto_max_detour_km < 0 || values.auto_max_detour_km > 50) { setInvalid("Desvio máximo: de 0 a 50 km."); return; }
+    if (values.auto_hold_minutes == null) { setInvalid("Espera para juntar pedidos: de 0 a 30 minutos."); return; }
+    if (values.auto_accept_minutes == null) { setInvalid("Prazo para iniciar a saída: de 0 a 60 minutos."); return; }
+    setInvalid("");
+    onSave(values);
+  };
   return (
     <>
       <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2 }}>
@@ -86,6 +101,7 @@ function AutoDispatch({ company, onSave }) {
           onChange={set("auto_accept_minutes")} inputProps={{ min: 0, max: 60 }}
           helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." />
       </Box>
+      {invalid && <Alert severity="error" sx={{ mt: 1.5 }}>{invalid}</Alert>}
       <Button variant="outlined" sx={{ mt: 1.5 }} onClick={save}>Salvar limites</Button>
     </>
   );
@@ -118,8 +134,14 @@ export function DeliverySettingsTab() {
       supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
       supabase.from("delivery_zones").select("*").eq("company_id", companyId).order("name"),
     ]);
+    if (c.error || !c.data) {
+      setError(c.error?.message || "Empresa não encontrada. Saia e entre de novo.");
+      setCompany(false);
+      return;
+    }
+    if (z.error) setError(z.error.message);
     setCompany(c.data);
-    setMeters(c.data?.off_route_meters ?? 250);
+    setMeters(c.data.off_route_meters ?? 250);
     setZones(z.data || []);
   }, [companyId]);
 
@@ -138,11 +160,13 @@ export function DeliverySettingsTab() {
 
   const addZone = async () => {
     setError("");
-    if (!name.trim()) return;
+    if (!name.trim()) { setError("Informe o nome do bairro."); return; }
+    const feeValue = String(fee).trim() === "" ? 0 : parsePrice(fee);
+    if (feeValue == null || feeValue < 0) { setError("Taxa inválida. Use só números, ex.: 5,00."); return; }
+    const etaValue = String(eta).trim() === "" ? null : Number(eta);
+    if (etaValue != null && !(Number.isInteger(etaValue) && etaValue > 0 && etaValue <= 600)) { setError("Tempo inválido: minutos inteiros, ex.: 40."); return; }
     const { error: err } = await supabase.from("delivery_zones").insert({
-      company_id: companyId, name: name.trim(),
-      fee: Number(String(fee).replace(",", ".")) || 0,
-      eta_minutes: eta ? Number(eta) : null,
+      company_id: companyId, name: name.trim(), fee: feeValue, eta_minutes: etaValue,
     });
     if (err) { setError(err.code === "23505" ? "Esse bairro já está cadastrado." : err.message); return; }
     setName(""); setFee(""); setEta("");
@@ -150,15 +174,32 @@ export function DeliverySettingsTab() {
   };
 
   const updateZone = async (z, patch) => {
-    await supabase.from("delivery_zones").update(patch).eq("id", z.id);
+    setError("");
+    const { error: err } = await supabase.from("delivery_zones").update(patch).eq("id", z.id);
+    if (err) setError(err.message);
     load();
   };
 
+  const deleteZone = async (z) => {
+    if (!window.confirm(`Excluir o bairro ${z.name}?`)) return;
+    setError("");
+    const { error: err } = await supabase.from("delivery_zones").delete().eq("id", z.id);
+    if (err) setError(err.message);
+    load();
+  };
+
+  const saveMeters = () => {
+    const n = Number(meters);
+    if (!Number.isInteger(n) || n < 50 || n > 5000) { setError("Distância de desvio: de 50 a 5000 metros."); return; }
+    updateCompany({ off_route_meters: n });
+  };
+
+  if (company === false) return <Alert severity="error">{error}</Alert>;
   if (!company) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
 
   return (
     <Box sx={{ maxWidth: 760 }}>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
       {saved && <Alert severity="success" sx={{ mb: 2 }}>{saved}</Alert>}
 
       <Section title="Endereço da loja (ponto de partida)">
@@ -179,7 +220,7 @@ export function DeliverySettingsTab() {
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mt: 2 }}>
           <TextField size="small" type="number" label="Considerar desvio a partir de (metros)" value={meters}
             onChange={(e) => setMeters(e.target.value)} sx={{ width: 300 }} inputProps={{ min: 50, max: 5000 }} />
-          <Button variant="outlined" onClick={() => updateCompany({ off_route_meters: Number(meters) })}>Salvar</Button>
+          <Button variant="outlined" onClick={saveMeters}>Salvar</Button>
         </Box>
       </Section>
 
@@ -214,7 +255,7 @@ export function DeliverySettingsTab() {
             <Typography sx={{ fontSize: 13, width: 90 }}>{money(z.fee)}</Typography>
             <Typography sx={{ fontSize: 13, width: 70, color: "#78716C" }}>{z.eta_minutes ? `${z.eta_minutes} min` : "—"}</Typography>
             <Switch size="small" checked={z.active} onChange={(e) => updateZone(z, { active: e.target.checked })} />
-            <IconButton size="small" onClick={async () => { await supabase.from("delivery_zones").delete().eq("id", z.id); load(); }}>
+            <IconButton size="small" aria-label={`Excluir ${z.name}`} onClick={() => deleteZone(z)}>
               <DeleteOutlineIcon fontSize="small" />
             </IconButton>
           </Box>

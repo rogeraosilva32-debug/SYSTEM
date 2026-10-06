@@ -9,8 +9,16 @@ let pending = null;
 const listeners = new Set();
 
 async function fetchSettings() {
-  const { data } = await supabase.rpc("my_company_settings").maybeSingle();
-  cache = data || null;
+  try {
+    const { data, error } = await supabase.rpc("my_company_settings").maybeSingle();
+    // Falhou: libera para a próxima tela tentar de novo (senão ficava nulo a sessão toda).
+    if (error) { pending = null; return null; }
+    cache = data || null;
+    if (!cache) pending = null;
+  } catch {
+    pending = null;
+    return null;
+  }
   listeners.forEach((fn) => fn(cache));
   return cache;
 }
@@ -33,4 +41,5 @@ export function useCompanySettings(enabled = true) {
 
 export function clearCompanySettings() {
   cache = null; pending = null;
+  listeners.forEach((fn) => fn(null));
 }

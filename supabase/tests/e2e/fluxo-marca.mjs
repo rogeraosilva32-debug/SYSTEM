@@ -55,7 +55,7 @@ log('logo 600x200:', await slot('Logo horizontal').getByRole('alert').innerText(
 await slot('Logo horizontal').getByRole('button', { name: 'Salvar' }).click();
 await page.waitForTimeout(1000);
 log('logo salvo no banco:', sql(`select coalesce(brand_logo_url,'(vazio)') from companies where name='Empresa A'`));
-await page.locator('input[type=color] ~ div input, input[value^="#"]').first().fill('#E30613');
+await page.locator('input[type=color] ~ div input, input[value^="#"]').first().fill('#e30613');
 await page.getByRole('button', { name: 'Salvar cor' }).click();
 await page.waitForTimeout(800);
 log('cor no banco:', sql(`select brand_color from companies where name='Empresa A'`));

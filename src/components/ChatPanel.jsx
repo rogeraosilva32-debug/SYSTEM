@@ -76,7 +76,8 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
       const unreadField = isCompanyAdmin ? "read_by_admin" : "read_by_collaborator";
       const unreadIds = (rows || []).filter((m) => !m[unreadField]).map((m) => m.id);
       if (unreadIds.length > 0) {
-        supabase.from("chat_messages").update({ [unreadField]: true }).in("id", unreadIds);
+        // O builder do supabase só envia ao ser "aguardado": sem o then, nada era gravado.
+        supabase.from("chat_messages").update({ [unreadField]: true }).in("id", unreadIds).then(() => {});
       }
 
       // Só assina tempo real DEPOIS do histórico já estar na tela — evita
@@ -92,7 +93,7 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
             return [...(prev || []), { ...payload.new, text }];
           });
           if (payload.new.sender_id !== profile.id) {
-            supabase.from("chat_messages").update({ [unreadField]: true }).eq("id", payload.new.id);
+            supabase.from("chat_messages").update({ [unreadField]: true }).eq("id", payload.new.id).then(() => {});
           }
         })
         .subscribe();
@@ -111,12 +112,17 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
     setSending(true);
     setInput("");
 
-    const { ciphertext, iv } = await encryptMessage(text, roomKey);
-    const { error } = await supabase.from("chat_messages").insert({
-      company_id: companyId, collaborator_id: collaboratorId, sender_id: profile.id,
-      ciphertext, iv,
-      read_by_admin: isCompanyAdmin, read_by_collaborator: !isCompanyAdmin,
-    });
+    let error;
+    try {
+      const { ciphertext, iv } = await encryptMessage(text, roomKey);
+      ({ error } = await supabase.from("chat_messages").insert({
+        company_id: companyId, collaborator_id: collaboratorId, sender_id: profile.id,
+        ciphertext, iv,
+        read_by_admin: isCompanyAdmin, read_by_collaborator: !isCompanyAdmin,
+      }));
+    } catch (e) {
+      error = e;
+    }
     setSending(false);
     if (error) {
       console.warn("Falha ao enviar mensagem:", error.message);
