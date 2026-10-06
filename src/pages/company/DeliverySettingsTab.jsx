@@ -42,7 +42,7 @@ function StoreAddress({ company, onSaved }) {
 // Despacho automático: limites que a empresa define.
 function AutoDispatch({ company, onSave }) {
   const [form, setForm] = useState({
-    auto_max_stops: company.auto_max_stops ?? 3, auto_max_detour_km: String(company.auto_max_detour_km ?? 2).replace(".", ","),
+    auto_max_stops: company.auto_max_stops ?? 3, auto_max_detour_km: String(company.auto_max_detour_km ?? 0).replace(".", ","),
     auto_hold_minutes: company.auto_hold_minutes ?? 0, auto_accept_minutes: company.auto_accept_minutes ?? 5,
     auto_dispatch_when: company.auto_dispatch_when || "ready",
   });
@@ -77,7 +77,7 @@ function AutoDispatch({ company, onSave }) {
           <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Despachar sozinho para os motoboys em expediente</Typography>
           <Typography sx={{ fontSize: 12.5, color: "#78716C", maxWidth: 540 }}>
             Quando um motoboy em expediente fica livre, o sistema monta a saída começando pelo pedido que espera há mais
-            tempo e junta os que ficam no caminho, na ordem de menor trajeto. Desligue só se quiser montar as saídas à mão.
+            tempo e junta os outros prontos até o máximo da loja, na ordem de menor trajeto. Pedido que fica pronto antes de o motoboy confirmar a saída entra nela. Desligue só se quiser montar as saídas à mão.
           </Typography>
         </Box>
         <Switch checked={company.auto_dispatch} slotProps={{ input: { "aria-label": "Despacho automático" } }} onChange={(e) => onSave({ auto_dispatch: e.target.checked })} />
@@ -85,10 +85,10 @@ function AutoDispatch({ company, onSave }) {
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5, mt: 2 }}>
         <TextField size="small" type="number" label="Máximo de entregas por saída" value={form.auto_max_stops}
           onChange={set("auto_max_stops")} inputProps={{ min: 1, max: 20 }}
-          helperText="Limite. A saída só junta pedidos que ficam no caminho." />
+          helperText="A saída junta os pedidos prontos até este número, na melhor rota." />
         <TextField size="small" label="Desvio máximo para juntar um pedido (km)" value={form.auto_max_detour_km}
           onChange={set("auto_max_detour_km")} inputMode="decimal"
-          helperText="Quanto o trajeto pode aumentar para levar mais um pedido." />
+          helperText="0 = sem limite (a saída vai cheia). Use um valor para não juntar pedidos muito fora do caminho." />
         <TextField select size="small" label="Despachar pedidos" value={form.auto_dispatch_when} onChange={set("auto_dispatch_when")}
           helperText=" ">
           <MenuItem value="ready">Quando marcados como prontos</MenuItem>

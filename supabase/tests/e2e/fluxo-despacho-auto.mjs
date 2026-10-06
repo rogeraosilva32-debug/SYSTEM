@@ -94,6 +94,14 @@ await c2.getByText(/Nova saída: 1 parada/).waitFor({ timeout: 10000 });
 check('ao voltar, recebe de novo', sql(`select courier_id from delivery_orders where customer_name = 'Bruno Lima'`) === '00000000-0000-0000-0000-0000000000c2');
 await c2.screenshot({ path: `${SHOTS}/53-motoboy2.png`, fullPage: true });
 
+// ───────── Pedido que fica pronto entra na saída ainda não confirmada ─────────
+sql(`insert into delivery_orders (company_id, customer_name, lat, lng, subtotal, status) values ('${A}', 'Davi Rocha', -23.61, -46.69, 20, 'received')`);
+sql(`update delivery_orders set status = 'ready' where customer_name = 'Davi Rocha'`);
+check('pronto entra na saída não confirmada até o máximo', sql(`select courier_id from delivery_orders where customer_name = 'Davi Rocha'`) === '00000000-0000-0000-0000-0000000000c2');
+await c2.reload();
+await c2.getByText(/Nova saída: 2 parada/).waitFor({ timeout: 15000 });
+check('motoboy vê a saída com as 2 paradas', true);
+
 console.log('\nERROS:', errors.length ? errors : 'nenhum');
 await browser.close();
 process.exit(errors.length ? 1 : 0);

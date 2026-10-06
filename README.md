@@ -580,8 +580,11 @@ Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.
   expediente fica livre, o banco (`auto_dispatch`) monta a saída começando
   pelo pedido que espera há mais tempo e junta os que ficam no caminho
   (inserção mais barata no trajeto loja → paradas → loja), respeitando o
-  máximo de entregas e o desvio máximo da empresa. Não enche até o máximo:
-  só junta o que compensa.
+  máximo de entregas da loja. A saída vai cheia até o máximo, na melhor rota;
+  o desvio máximo é opcional (0 = sem limite, padrão desde 06/10/2026).
+- **Saída ainda não confirmada**: enquanto o motoboy não toca em "Confirmar
+  saída para entrega", os pedidos que ficam prontos entram na saída dele
+  (até o máximo) e a rota é refeita (`auto_plan_route`).
 - **Ligado por padrão** (desde 06/10/2026): empresas novas e as que já
   existiam (uma única vez, marcado em `schema_flags`). Com ele ligado a fila
   não mostra o "Despachar" manual; mostra um aviso quando não há motoboy em
