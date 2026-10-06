@@ -1,4 +1,5 @@
 import { Component } from "react";
+import { logError } from "../services/eventLog";
 
 // Sem isso, QUALQUER erro não tratado durante a renderização de qualquer tela
 // (um campo inesperado vindo do banco, uma resposta de rede em formato
@@ -21,6 +22,7 @@ export default class ErrorBoundary extends Component {
     // Fica só no console por enquanto — se um serviço de monitoramento de
     // erros (Sentry ou similar) for adicionado no futuro, é aqui que entra.
     console.error("Erro não tratado capturado pelo ErrorBoundary:", error, info?.componentStack);
+    logError(error, { action: "screen_crash", details: { componente: String(info?.componentStack || "").slice(0, 800) } });
     // Depois de uma nova versão no ar, a tela aberta pode pedir um arquivo
     // que não existe mais: recarrega uma vez sozinho para pegar a versão nova.
     if (/Loading chunk|dynamically imported module|Importing a module script failed/i.test(error?.message || "")) {

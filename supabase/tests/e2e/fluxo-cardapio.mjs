@@ -111,7 +111,7 @@ const card = page.locator('div').filter({ has: page.getByText(`#${num}`, { exact
 await card.locator('input[type=checkbox]').check();
 await page.getByRole('button', { name: /Despachar \(1\)/ }).click();
 await page.getByLabel('Motoboy').click();
-await page.getByRole('option', { name: /C2 · R\$ 6,00 por entrega/ }).click();
+await page.getByRole('option', { name: /^C2 · .*R\$ 6,00 por entrega/ }).click();
 await page.getByText(/A taxa de C2 \(R\$\s6,00\) entra no total/).waitFor();
 check('parada mostra o total com a taxa do motoboy', await page.getByText(/total R\$\s100,00/).isVisible());
 await page.screenshot({ path: `${SHOTS}/43-despacho-taxa.png` });

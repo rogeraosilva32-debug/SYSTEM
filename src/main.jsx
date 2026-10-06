@@ -6,7 +6,10 @@ import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 import theme from './theme.js'
+import { startEventLog } from './services/eventLog.js'
 import "leaflet/dist/leaflet.css";
+
+startEventLog()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

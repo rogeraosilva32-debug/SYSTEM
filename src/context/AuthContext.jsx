@@ -1,6 +1,18 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import supabase from "../services/supabase";
 import { clearCompanySettings } from "../hooks/useCompanySettings";
+import { logEvent } from "../services/eventLog";
+
+// Uma linha no log do sistema por pessoa por aba aberta (login ou app aberto).
+function logSessionStart(authUser) {
+  if (!authUser) return;
+  const key = `session-logged:${authUser.id}`;
+  try {
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, "1");
+  } catch { /* sem sessionStorage: registra mesmo assim */ }
+  logEvent("conta", "session_start", "Entrou no sistema (login ou app aberto)");
+}
 
 const AuthContext = createContext(null);
 
@@ -87,6 +99,7 @@ export function AuthProvider({ children }) {
         setUser(authUser);
         lastUserId.current = authUser?.id || null;
         const ok = await loadProfile(authUser);
+        if (ok) logSessionStart(authUser);
         // Se a primeira tentativa falhou (ex: cache de schema do PostgREST
         // ainda se ajustando logo após uma alteração de tabela), tenta de
         // novo sozinho depois de um instante, em vez de deixar a pessoa
@@ -120,6 +133,7 @@ export function AuthProvider({ children }) {
           if (cancelled) return;
           try {
             const ok = await loadProfile(authUser);
+            if (ok) logSessionStart(authUser);
             if (!ok && authUser && !cancelled) {
               setTimeout(() => { if (!cancelled) loadProfile(authUser); }, 2500);
             }
@@ -136,6 +150,9 @@ export function AuthProvider({ children }) {
   }, [loadProfile]);
 
   const logout = useCallback(async () => {
+    // Registra antes de sair (depois não há mais quem identificar); no máximo 2 s.
+    await Promise.race([logEvent("conta", "logout", "Saiu do sistema"), new Promise((r) => setTimeout(r, 2000))]);
+    try { if (lastUserId.current) sessionStorage.removeItem(`session-logged:${lastUserId.current}`); } catch { /* ok */ }
     await supabase.auth.signOut();
     clearCompanySettings();
     setUser(null);

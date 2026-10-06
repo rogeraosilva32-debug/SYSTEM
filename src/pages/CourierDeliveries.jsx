@@ -13,6 +13,7 @@ import ReportProblemOutlinedIcon from "@mui/icons-material/ReportProblemOutlined
 import AppShell from "../components/AppShell";
 import CollaboratorNav from "../components/CollaboratorNav";
 import supabase from "../services/supabase";
+import { logEvent } from "../services/eventLog";
 import { useAuth } from "../context/AuthContext";
 import {
   ORDER_STATUS, PAYMENT_LABEL, money, orderAddress, googleMapsUrl, wazeUrl, fetchRouteOptions,
@@ -246,6 +247,18 @@ export default function CourierDeliveries() {
     );
     return () => navigator.geolocation.clearWatch(id);
   }, [gpsOn]);
+
+  // GPS caiu ou voltou: fica no log do sistema (no máximo 1 aviso a cada 5 min).
+  const gpsWasBad = useRef(false);
+  useEffect(() => {
+    if (geoError && !gpsWasBad.current) {
+      gpsWasBad.current = true;
+      logEvent("rede", "gps_lost", `GPS do motoboy: ${geoError}`, "warning", {}, { key: "gps-lost", everyMs: 300000 });
+    } else if (!geoError && gpsWasBad.current && myPos) {
+      gpsWasBad.current = false;
+      logEvent("rede", "gps_back", "GPS do motoboy voltou", "info", {}, { key: "gps-back", everyMs: 300000 });
+    }
+  }, [geoError, myPos]);
 
   // Envia posição (última posição + histórico) durante a saída e o
   // expediente; o km do acerto vem desse histórico.

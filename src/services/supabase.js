@@ -18,7 +18,23 @@ if (!supabaseUrl || !supabaseKey) {
 const urlText = typeof window !== "undefined" ? `${window.location.hash}&${window.location.search}` : "";
 export const passwordRecovery = { fromUrl: /[#&?]type=(recovery|invite)(&|$)/.test(urlText), event: false };
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Avisa o log do sistema quando o servidor não responde (com internet) ou
+// devolve erro 5xx. O monitor é ligado em services/eventLog.js.
+export const fetchMonitor = { onProblem: null };
+const monitoredFetch = async (input, init) => {
+  const url = typeof input === "string" ? input : input?.url || "";
+  const skip = url.includes("log_client_event");
+  try {
+    const res = await fetch(input, init);
+    if (!skip && res.status >= 500) fetchMonitor.onProblem?.({ kind: "http", status: res.status, url });
+    return res;
+  } catch (err) {
+    if (!skip && err?.name !== "AbortError") fetchMonitor.onProblem?.({ kind: "network", message: err?.message, url });
+    throw err;
+  }
+};
+
+const supabase = createClient(supabaseUrl, supabaseKey, { global: { fetch: monitoredFetch } });
 
 // Registrado logo após criar o cliente pra não perder o PASSWORD_RECOVERY,
 // que dispara durante a inicialização (antes da tela de nova senha montar).

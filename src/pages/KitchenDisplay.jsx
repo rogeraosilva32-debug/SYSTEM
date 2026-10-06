@@ -8,6 +8,7 @@ import SettingsIcon from "@mui/icons-material/SettingsOutlined";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import supabase from "../services/supabase";
+import { setKitchenToken } from "../services/eventLog";
 
 // Modo cozinha: tela cheia com a fila de preparo, para deixar numa TV ou
 // tablet na cozinha. Abre com login de gestor (/cozinha) ou pelo link da
@@ -148,6 +149,8 @@ export default function KitchenDisplay() {
   const known = useRef(null);
   const settingsRef = useRef(settings);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
+  // Sem login, os avisos de conexão desta tela vão para o log pelo link dela.
+  useEffect(() => { setKitchenToken(token); return () => setKitchenToken(null); }, [token]);
 
   const load = useCallback(async () => {
     try {

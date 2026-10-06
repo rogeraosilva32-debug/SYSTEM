@@ -17,6 +17,7 @@ import InfoField from "../components/InfoField";
 import { generateCode } from "../utils/codeGenerator";
 import { LicenseUsage, InvoicesTab, CompanyBilling } from "./platform/PlatformBilling";
 import { ReportsTab } from "./company/ReportsTab";
+import SystemLog from "./platform/SystemLog";
 
 function copyToClipboard(text) {
   navigator.clipboard?.writeText(text).catch(() => {});
@@ -236,6 +237,7 @@ function CompanyDetail({ company, onBack, onUpdated }) {
           { key: "services", label: `Serviços (${services?.length ?? "…"})` },
           { key: "assignments", label: `Designações (${assignments?.length ?? "…"})` },
           { key: "reports", label: "Relatórios" },
+          { key: "log", label: "Log" },
           { key: "audit", label: "Auditoria" },
         ].map((t) => (
           <Box key={t.key} onClick={() => setTab(t.key)} sx={{
@@ -289,6 +291,7 @@ function CompanyDetail({ company, onBack, onUpdated }) {
       )}
 
       {tab === "reports" && <ReportsTab companyId={company.id} />}
+      {tab === "log" && <SystemLog companyId={company.id} />}
       {tab === "audit" && <AuditLogViewer companyId={company.id} />}
 
       <Dialog open={!!detail} onClose={() => setDetail(null)} maxWidth="sm" fullWidth>
@@ -353,6 +356,7 @@ export default function PlatformAdmin() {
             { key: "companies", label: "Empresas" },
             { key: "usage", label: "Uso de licenças" },
             { key: "invoices", label: "Faturas" },
+            { key: "log", label: "Log do sistema" },
           ].map((t) => (
             <Box key={t.key} onClick={() => setView(t.key)} sx={{
               px: 2, py: 1.2, cursor: "pointer", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
@@ -368,6 +372,8 @@ export default function PlatformAdmin() {
         <LicenseUsage onOpenCompany={(id) => { const c = companies?.find((x) => x.id === id); if (c) setSelected(c); }} />
       ) : !selected && view === "invoices" ? (
         <InvoicesTab />
+      ) : !selected && view === "log" ? (
+        <SystemLog />
       ) : selected ? (
         <CompanyDetail company={selected} onBack={() => setSelected(null)} onUpdated={handleUpdated} />
       ) : companies === null ? (

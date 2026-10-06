@@ -4032,11 +4032,14 @@ create or replace function public.kitchen_advance(p_order_id uuid, p_token text 
 returns text language plpgsql security definer set search_path = public as $$
 declare v_company uuid := public.kitchen_company(p_token); v_status text;
 begin
+  -- No log do sistema aparece como "Tela da cozinha" (não tem usuário logado).
+  if p_token is not null then perform set_config('app.log_actor', 'Tela da cozinha', true); end if;
   update public.delivery_orders
     set status = case status when 'received' then 'preparing' else 'ready' end,
         ready_at = case when status = 'preparing' then coalesce(ready_at, now()) else ready_at end
     where id = p_order_id and company_id = v_company and run_id is null and status in ('received', 'preparing')
     returning status into v_status;
+  perform set_config('app.log_actor', '', true);
   if v_status is null then raise exception 'Pedido não está mais na fila de preparo.'; end if;
   return v_status;
 end;
@@ -4135,6 +4138,517 @@ $$;
 grant execute on function public.update_run(uuid, uuid[], uuid) to authenticated;
 
 -- ---------------------------------------------------------------------
+-- LOG DO SISTEMA (06/10/2026): tudo o que acontece, para o administrador
+-- da plataforma, no estilo do log do Mikrotik (hora, tópicos, mensagem).
+-- O banco grava sozinho (gatilhos) pedidos, saídas, expediente, ajustes,
+-- cardápio, equipe e financeiro, com o antes/depois de cada campo. O app
+-- grava conexão, login, abertura e erros pela função log_client_event.
+-- Ninguém escreve ou apaga linhas direto: só leitura e só para a plataforma.
+-- ---------------------------------------------------------------------
+create table if not exists public.system_log (
+  id bigint generated always as identity primary key,
+  created_at timestamptz not null default now(),
+  company_id uuid,
+  company_name text,
+  actor_id uuid,
+  actor_name text,
+  actor_email text,
+  actor_role text,
+  topic text not null,
+  level text not null default 'info' check (level in ('info', 'warning', 'error', 'critical')),
+  action text not null,
+  message text not null,
+  entity text,
+  entity_id text,
+  changes jsonb,
+  details jsonb,
+  ip text,
+  user_agent text,
+  source text not null default 'banco' check (source in ('banco', 'app'))
+);
+create index if not exists system_log_created_idx on public.system_log (created_at desc);
+create index if not exists system_log_company_idx on public.system_log (company_id, id desc);
+create index if not exists system_log_actor_idx on public.system_log (actor_id, created_at desc);
+create index if not exists system_log_ip_idx on public.system_log (ip, created_at desc) where actor_id is null;
+
+alter table public.system_log enable row level security;
+drop policy if exists system_log_platform_read on public.system_log;
+create policy system_log_platform_read on public.system_log for select using (public.is_platform_admin());
+revoke all on public.system_log from public, anon, authenticated;
+grant select on public.system_log to authenticated;
+
+-- IP e aparelho de quem fez a chamada (cabeçalhos que o Supabase repassa).
+create or replace function public.log_request_info()
+returns table (ip text, user_agent text) language plpgsql stable as $$
+declare h jsonb;
+begin
+  begin
+    h := nullif(current_setting('request.headers', true), '')::jsonb;
+  exception when others then h := null;
+  end;
+  -- cf-connecting-ip e x-real-ip vêm do proxy; o 1º do x-forwarded-for pode ser
+  -- inventado pelo aparelho, então é só o último recurso.
+  ip := left(trim(coalesce(h ->> 'cf-connecting-ip', h ->> 'x-real-ip', split_part(h ->> 'x-forwarded-for', ',', 1))), 64);
+  user_agent := left(h ->> 'user-agent', 300);
+  if ip = '' then ip := null; end if;
+  return next;
+end;
+$$;
+
+-- Grava uma linha. Nunca derruba quem chamou: se o log falhar, a ação segue.
+create or replace function public.log_event(
+  p_company uuid, p_topic text, p_level text, p_action text, p_message text,
+  p_entity text default null, p_entity_id text default null,
+  p_changes jsonb default null, p_details jsonb default null, p_source text default 'banco')
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  v_uid uuid;
+  v_name text; v_email text; v_role text;
+  v_req record;
+  v_tag text := nullif(current_setting('app.log_actor', true), '');
+begin
+  begin
+    v_uid := auth.uid();
+    select * into v_req from public.log_request_info();
+    if coalesce(current_setting('app.auto_dispatch_running', true), '') = '1' then
+      v_uid := null; v_name := 'Despacho automático'; v_role := 'sistema';
+    elsif v_tag is not null and v_uid is null then
+      v_name := v_tag; v_role := 'cozinha';
+    end if;
+    if v_uid is not null then
+      select coalesce(v_name, p.name), p.email,
+             coalesce(v_role, case when p.is_platform_admin then 'plataforma'
+                                   when p.company_role = 'company_admin' then 'gestor'
+                                   when p.company_role = 'supervisor' then 'supervisor'
+                                   when p.company_role = 'collaborator' then 'motoboy'
+                                   else 'usuário' end)
+        into v_name, v_email, v_role
+        from public.profiles p where p.id = v_uid;
+      v_role := coalesce(v_role, 'usuário');
+    end if;
+    if v_role is null then
+      v_role := case when v_req.ip is not null or p_source = 'app' then 'visitante' else 'sistema' end;
+      v_name := coalesce(v_name, case when v_role = 'sistema' then 'Sistema' else 'Visitante' end);
+    end if;
+
+    insert into public.system_log (company_id, company_name, actor_id, actor_name, actor_email, actor_role,
+                                   topic, level, action, message, entity, entity_id, changes, details,
+                                   ip, user_agent, source)
+    values (p_company, (select name from public.companies where id = p_company), v_uid, v_name, v_email, v_role,
+            p_topic, coalesce(p_level, 'info'), p_action, left(p_message, 1000), p_entity, p_entity_id,
+            p_changes, p_details, v_req.ip, v_req.user_agent, coalesce(p_source, 'banco'));
+  exception when others then
+    raise warning 'log do sistema não gravado (%): %', p_action, sqlerrm;
+  end;
+end;
+$$;
+
+create or replace function public.log_money(v numeric) returns text language sql immutable as $$
+  select 'R$ ' || replace(to_char(v, 'FM999999990.00'), '.', ',')
+$$;
+
+create or replace function public.log_person(p uuid) returns text language sql stable security definer set search_path = public as $$
+  select coalesce((select coalesce(name, email) from public.profiles where id = p), 'ninguém')
+$$;
+
+-- Nome legível dos campos (os demais aparecem com o nome técnico).
+create or replace function public.log_field(t text, f text) returns text language sql immutable as $$
+  select coalesce('{
+    "name": "nome", "status": "status", "notes": "observações", "price": "preço",
+    "active": "ativo", "description": "descrição", "category_id": "categoria", "sort_order": "ordem",
+    "variants": "variações", "phone": "telefone", "fee": "taxa", "eta_minutes": "tempo estimado",
+    "seats_limit": "limite de colaboradores", "feature_delivery_code": "código de entrega", "feature_branding": "marca própria", "strict_route_mode": "rota exata",
+    "off_route_meters": "tolerância fora da rota (m)", "brand_color": "cor da marca", "brand_logo_url": "logo", "brand_icon_url": "ícone",
+    "brand_login_bg_url": "fundo do login", "brand_share_url": "link de compartilhar", "timezone": "fuso horário", "courier_daily_rate": "diária do motoboy",
+    "courier_per_delivery": "valor por entrega", "courier_per_km": "valor por km", "monthly_price": "mensalidade", "billing_day": "dia da cobrança",
+    "grace_days": "dias de tolerância", "store_street": "rua da loja", "store_number": "número da loja", "store_neighborhood": "bairro da loja",
+    "store_city": "cidade da loja", "store_state": "estado da loja", "store_lat": "latitude da loja", "store_lng": "longitude da loja",
+    "courier_fee_on_order": "taxa do motoboy no pedido", "auto_dispatch": "despacho automático", "auto_max_stops": "máximo de entregas por saída", "auto_max_detour_km": "desvio máximo (km)",
+    "auto_hold_minutes": "espera para juntar pedidos", "auto_accept_minutes": "prazo para o motoboy confirmar", "auto_dispatch_when": "quando despachar", "license_key": "chave de licença",
+    "collaborator_invite_code": "código de convite", "customer_name": "cliente", "customer_phone": "telefone do cliente", "address_street": "rua",
+    "address_number": "número", "address_complement": "complemento", "address_neighborhood": "bairro", "address_city": "cidade",
+    "items": "itens", "subtotal": "subtotal", "delivery_fee": "taxa de entrega", "total": "total",
+    "payment_method": "pagamento", "change_for": "troco para", "zone_id": "zona", "run_id": "saída",
+    "courier_id": "motoboy", "problem_reason": "motivo do problema", "payment_received": "pagamento recebido", "courier_fee": "taxa do motoboy",
+    "route_choice": "rota escolhida", "order_type": "tipo", "company_role": "cargo", "company_id": "empresa",
+    "supervised_by": "supervisor", "is_platform_admin": "admin da plataforma", "email": "e-mail", "cpf": "CPF",
+    "daily_rate": "diária", "per_delivery": "por entrega", "per_km": "por km", "amount": "valor",
+    "kind": "tipo", "due_date": "vencimento", "paid_at": "pago em", "adjustment": "ajuste",
+    "adjustment_note": "motivo do ajuste", "start_date": "início", "end_date": "fim", "reason": "motivo",
+    "label": "nome", "revoked": "revogada", "base_url": "endereço", "api_key": "chave",
+    "field_mapping": "mapeamento", "locked": "editada pelo gestor", "paused": "pausa", "lat": "latitude", "lng": "longitude", "paused_reason": "motivo da pausa",
+    "km": "km", "ended_at": "fim do expediente"
+  }'::jsonb ->> f, f)
+$$;
+
+create or replace function public.log_order_status(s text) returns text language sql immutable as $$
+  select coalesce(jsonb_build_object('received', 'recebido', 'preparing', 'em preparo', 'ready', 'pronto',
+    'on_route', 'em rota', 'delivered', 'entregue', 'cancelled', 'cancelado', 'problem', 'com problema') ->> s, s)
+$$;
+
+-- Gatilho genérico: descobre o que mudou e escreve uma frase.
+create or replace function public.log_row_change()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_topic text := tg_argv[0];
+  v_new jsonb := case when tg_op <> 'DELETE' then to_jsonb(new) end;
+  v_old jsonb := case when tg_op <> 'INSERT' then to_jsonb(old) end;
+  v_row jsonb;
+  v_changes jsonb;
+  v_fields text;
+  v_company uuid;
+  v_msg text;
+  v_level text := 'info';
+  v_action text;
+  v_label text;
+  v_secret text[] := array['license_key', 'collaborator_invite_code', 'api_key', 'key', 'token', 'cpf'];
+  v_skip text[] := array['updated_at', 'created_at', 'last_lat', 'last_lng', 'last_location_at', 'next_order_number',
+                         'last_off_route_at', 'stop_sequence', 'ready_at', 'dispatched_at', 'delivered_at',
+                         'payment_received_at', 'delivered_lat', 'delivered_lng', 'last_synced_at'];
+  k text;
+begin
+  -- Apagado em cascata (ex.: empresa apagada leva os pedidos): fica só a linha de quem foi apagado.
+  v_row := coalesce(v_new, v_old);
+  v_company := case when tg_table_name = 'companies' then (v_row ->> 'id')::uuid else (v_row ->> 'company_id')::uuid end;
+  if tg_op = 'DELETE' and tg_table_name <> 'companies' and v_company is not null
+     and not exists (select 1 from public.companies where id = v_company) then
+    return null;
+  end if;
+  if tg_table_name = 'profiles' then v_company := coalesce((v_new ->> 'company_id')::uuid, (v_old ->> 'company_id')::uuid); end if;
+
+  if tg_op = 'UPDATE' then
+    -- campo: [antes, depois, nome legível]
+    select jsonb_object_agg(key, jsonb_build_array(v_old -> key, v_new -> key, public.log_field(tg_table_name, key))) into v_changes
+      from jsonb_object_keys(v_new) key
+     where key <> all (v_skip) and (v_new -> key) is distinct from (v_old -> key);
+    if v_changes is null then return null; end if;
+    select string_agg(public.log_field(tg_table_name, key), ', ') into v_fields from jsonb_object_keys(v_changes) key;
+  end if;
+  -- Segredos: mostra que mudou, nunca o valor.
+  foreach k in array v_secret loop
+    if v_changes ? k then v_changes := jsonb_set(v_changes, array[k], jsonb_build_array('••••', '••••', public.log_field(tg_table_name, k))); end if;
+    if v_row ? k and v_row ->> k is not null then v_row := jsonb_set(v_row, array[k], '"••••"'); end if;
+  end loop;
+
+  if tg_table_name = 'delivery_orders' then
+    v_label := 'Pedido #' || coalesce(v_row ->> 'number', '?') || coalesce(' de ' || nullif(v_row ->> 'customer_name', ''), '')
+               || coalesce(' (' || nullif(v_row ->> 'customer_phone', '') || ')', '');
+    if tg_op = 'INSERT' then
+      v_action := 'order_created';
+      v_msg := v_label || ' criado: ' || case when v_row ->> 'order_type' = 'local' then 'balcão' else 'entrega' end
+               || coalesce(', ' || public.log_money((v_row ->> 'total')::numeric), '')
+               || coalesce(', ' || nullif(concat_ws(', ', nullif(v_row ->> 'address_street', '') || coalesce(' ' || (v_row ->> 'address_number'), ''),
+                                                    nullif(v_row ->> 'address_neighborhood', '')), ''), '');
+    elsif tg_op = 'DELETE' then
+      v_action := 'order_deleted'; v_level := 'warning'; v_msg := v_label || ' apagado';
+    elsif v_changes ? 'status' then
+      v_action := 'order_status';
+      v_msg := v_label || ': ' || public.log_order_status(v_old ->> 'status') || ' → ' || public.log_order_status(v_new ->> 'status');
+      if v_new ->> 'status' = 'on_route' then
+        v_msg := v_msg || ' com ' || public.log_person((v_new ->> 'courier_id')::uuid);
+      elsif v_new ->> 'status' = 'delivered' then
+        v_msg := v_msg || coalesce(' por ' || public.log_person((v_new ->> 'courier_id')::uuid), '');
+        if nullif(v_new ->> 'forced_reason', '') is not null then
+          v_level := 'warning'; v_msg := v_msg || ' sem código do cliente (motivo: ' || (v_new ->> 'forced_reason') || ')';
+        end if;
+      elsif v_new ->> 'status' = 'cancelled' then
+        v_level := 'warning';
+      elsif v_new ->> 'status' = 'problem' then
+        v_level := 'warning'; v_msg := v_msg || coalesce(' (' || nullif(v_new ->> 'problem_reason', '') || ')', '');
+      end if;
+    elsif v_changes ? 'run_id' or v_changes ? 'courier_id' then
+      v_action := 'order_run';
+      v_msg := v_label || case when v_new ->> 'run_id' is null then ' saiu da saída de ' || public.log_person((v_old ->> 'courier_id')::uuid)
+                               else ' entrou na saída de ' || public.log_person((v_new ->> 'courier_id')::uuid) end;
+    else
+      v_action := 'order_edited'; v_msg := v_label || ' alterado: ' || v_fields;
+    end if;
+
+  elsif tg_table_name = 'delivery_runs' then
+    v_label := public.log_person((v_row ->> 'courier_id')::uuid);
+    if tg_op = 'INSERT' then
+      v_action := 'run_created';
+      v_msg := 'Saída criada para ' || v_label || case when (v_row ->> 'auto')::boolean then ' pelo despacho automático' else '' end;
+    elsif tg_op = 'DELETE' then
+      v_action := 'run_deleted'; v_level := 'warning'; v_msg := 'Saída de ' || v_label || ' apagada';
+    elsif v_changes ? 'status' then
+      v_action := 'run_status';
+      v_msg := case v_new ->> 'status'
+                 when 'in_progress' then v_label || ' confirmou a saída para entrega'
+                 when 'finished' then v_label || ' terminou a saída'
+                 when 'cancelled' then 'Saída de ' || v_label || ' cancelada'
+                 else 'Saída de ' || v_label || ' voltou para aguardando confirmação' end;
+      if v_new ->> 'status' = 'cancelled' then v_level := 'warning'; end if;
+    elsif v_changes ? 'courier_id' then
+      v_action := 'run_reassigned';
+      v_msg := 'Saída passou de ' || public.log_person((v_old ->> 'courier_id')::uuid) || ' para ' || v_label;
+    elsif v_changes ? 'off_route_events' then
+      v_action := 'off_route'; v_level := 'warning';
+      v_msg := v_label || ' saiu da rota definida (' || coalesce(v_new ->> 'off_route_events', '?') || 'ª vez nesta saída)';
+    elsif v_changes ? 'locked' and (v_new ->> 'locked')::boolean then
+      v_action := 'run_locked'; v_msg := 'Saída de ' || v_label || ' editada pelo gestor; o despacho automático não mexe mais nela';
+    else
+      v_action := 'run_edited'; v_msg := 'Saída de ' || v_label || ' alterada: ' || v_fields;
+    end if;
+
+  elsif tg_table_name = 'courier_shifts' then
+    v_label := public.log_person((v_row ->> 'courier_id')::uuid);
+    if tg_op = 'INSERT' then
+      v_action := 'shift_started'; v_msg := v_label || ' iniciou o expediente';
+    elsif tg_op = 'DELETE' then
+      v_action := 'shift_deleted'; v_level := 'warning'; v_msg := 'Expediente de ' || v_label || ' apagado';
+    elsif v_changes ? 'ended_at' and v_new ->> 'ended_at' is not null then
+      v_action := 'shift_ended';
+      v_msg := v_label || ' encerrou o expediente'
+               || case when coalesce((v_new ->> 'km')::numeric, 0) > 0
+                       then ' (' || replace(to_char((v_new ->> 'km')::numeric, 'FM999990.0'), '.', ',') || ' km)' else '' end;
+      if (v_new ->> 'closed_by') is not null and (v_new ->> 'closed_by') <> (v_new ->> 'courier_id') then
+        v_msg := replace(v_msg, v_label || ' encerrou o expediente', 'Expediente de ' || v_label || ' encerrado por ' || public.log_person((v_new ->> 'closed_by')::uuid));
+      end if;
+    elsif v_changes ? 'paused' then
+      v_action := case when (v_new ->> 'paused')::boolean then 'shift_paused' else 'shift_resumed' end;
+      v_msg := v_label || case when (v_new ->> 'paused')::boolean
+                               then ' pausou' || coalesce(' (' || nullif(nullif(v_new ->> 'paused_reason', ''), 'Pausa') || ')', '')
+                               else ' voltou da pausa' end;
+    else
+      v_action := 'shift_edited'; v_msg := 'Expediente de ' || v_label || ' alterado: ' || v_fields;
+    end if;
+
+  elsif tg_table_name = 'companies' then
+    v_label := coalesce(v_row ->> 'name', 'Empresa');
+    if tg_op = 'INSERT' then
+      v_action := 'company_created'; v_msg := 'Empresa ' || v_label || ' criada';
+    elsif tg_op = 'DELETE' then
+      v_action := 'company_deleted'; v_level := 'critical'; v_msg := 'Empresa ' || v_label || ' apagada';
+    elsif v_changes ? 'status' then
+      v_action := 'company_status'; v_level := 'warning';
+      v_msg := 'Empresa ' || v_label || case when v_new ->> 'status' = 'suspended' then ' suspensa' else ' reativada' end;
+    else
+      v_action := 'settings_changed'; v_msg := 'Ajustes alterados: ' || v_fields;
+    end if;
+
+  elsif tg_table_name = 'profiles' then
+    v_label := coalesce(nullif(v_row ->> 'name', ''), v_row ->> 'email', 'usuário');
+    if tg_op = 'INSERT' then
+      v_action := 'user_created'; v_msg := 'Novo usuário: ' || v_label || coalesce(' (' || (v_row ->> 'email') || ')', '');
+    elsif tg_op = 'DELETE' then
+      v_action := 'user_deleted'; v_level := 'warning'; v_msg := 'Usuário ' || v_label || ' apagado';
+    elsif v_changes ? 'is_platform_admin' then
+      v_action := 'platform_admin_changed'; v_level := 'critical';
+      v_msg := v_label || case when (v_new ->> 'is_platform_admin')::boolean then ' virou administrador da plataforma'
+                               else ' deixou de ser administrador da plataforma' end;
+    elsif v_changes ? 'company_id' then
+      v_action := 'user_company_changed';
+      v_msg := v_label || case when v_new ->> 'company_id' is null then ' saiu da empresa' else ' entrou na empresa' end;
+      if v_new ->> 'company_id' is null then v_company := (v_old ->> 'company_id')::uuid; end if;
+    elsif v_changes ? 'company_role' then
+      v_action := 'user_role_changed';
+      v_msg := 'Cargo de ' || v_label || ': ' || coalesce(v_old ->> 'company_role', 'nenhum') || ' → ' || coalesce(v_new ->> 'company_role', 'nenhum');
+    else
+      v_action := 'user_edited'; v_msg := 'Perfil de ' || v_label || ' alterado: ' || v_fields;
+    end if;
+
+  else
+    v_label := coalesce(jsonb_build_object(
+      'products', 'Produto', 'product_categories', 'Categoria', 'customers', 'Cliente', 'delivery_zones', 'Zona de entrega',
+      'courier_rates', 'Valores do motoboy', 'settlements', 'Acerto do motoboy', 'cash_movements', 'Movimento de caixa',
+      'license_invoices', 'Fatura', 'kitchen_displays', 'Link da tela da cozinha', 'crm_integrations', 'Integração com CRM',
+      'api_keys', 'Chave de API', 'collaborator_time_off', 'Folga') ->> tg_table_name, tg_table_name);
+    v_label := v_label || coalesce(' ' || nullif(coalesce(v_row ->> 'name', v_row ->> 'label', v_row ->> 'note',
+                 case when v_row ? 'courier_id' then public.log_person((v_row ->> 'courier_id')::uuid) end,
+                 case when v_row ? 'collaborator_id' then public.log_person((v_row ->> 'collaborator_id')::uuid) end), ''), '')
+               || coalesce(' (' || public.log_money(nullif(coalesce(v_row ->> 'amount', v_row ->> 'total', v_row ->> 'price'), '')::numeric) || ')', '');
+    v_action := tg_table_name || '_' || lower(tg_op);
+    k := case when tg_table_name in ('product_categories', 'delivery_zones', 'license_invoices', 'crm_integrations',
+                                     'api_keys', 'collaborator_time_off') then 'a' else 'o' end;
+    v_msg := v_label || case tg_op when 'INSERT' then ' criad' || k when 'DELETE' then ' apagad' || k else ' alterad' || k || ': ' || v_fields end;
+    if tg_op = 'DELETE' then v_level := 'warning'; end if;
+  end if;
+
+  perform public.log_event(v_company, v_topic, v_level, v_action, v_msg, tg_table_name, coalesce(v_row ->> 'id', v_row ->> 'courier_id', v_row ->> 'company_id'),
+                           v_changes, case when tg_op <> 'UPDATE' then v_row end);
+  return null;
+end;
+$$;
+
+do $$
+declare
+  t record;
+begin
+  for t in select * from (values
+    ('delivery_orders', 'pedido'), ('delivery_runs', 'despacho'), ('courier_shifts', 'expediente'),
+    ('companies', 'ajustes'), ('profiles', 'equipe'), ('collaborator_time_off', 'equipe'),
+    ('products', 'cardápio'), ('product_categories', 'cardápio'), ('customers', 'cliente'), ('delivery_zones', 'ajustes'),
+    ('courier_rates', 'financeiro'), ('settlements', 'financeiro'), ('cash_movements', 'financeiro'), ('license_invoices', 'financeiro'),
+    ('kitchen_displays', 'segurança'), ('crm_integrations', 'integração'), ('api_keys', 'segurança')
+  ) as x(tbl, topic)
+  loop
+    if to_regclass('public.' || t.tbl) is null then continue; end if;
+    begin
+      execute format('drop trigger if exists trg_system_log on public.%I', t.tbl);
+      execute format('drop trigger if exists trg_00_system_log on public.%I', t.tbl);
+      -- "00": os gatilhos rodam em ordem alfabética; assim o log da ação vem antes do despacho que ela dispara.
+      execute format('create trigger trg_00_system_log after insert or update or delete on public.%I
+                      for each row execute function public.log_row_change(%L)', t.tbl, t.topic);
+    exception when others then
+      raise notice 'log do sistema sem gatilho em %: %', t.tbl, sqlerrm;
+    end;
+  end loop;
+end $$;
+
+-- O que já ia para o log de auditoria da empresa também aparece aqui.
+create or replace function public.log_from_audit()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_msg text;
+begin
+  -- Já registrados pelos gatilhos das tabelas.
+  if new.action in ('company_status_changed', 'settlement_created', 'settlement_paid', 'settlement_deleted', 'delivery_forced') then
+    return null;
+  end if;
+  v_msg := coalesce(jsonb_build_object(
+    'collaborator_removed', 'Colaborador removido', 'collaborator_role_changed', 'Cargo de colaborador alterado',
+    'collaborator_joined', 'Colaborador entrou na empresa pelo convite', 'company_admin_joined', 'Administrador ativou a licença',
+    'assignment_created', 'Designação criada', 'assignment_cancelled', 'Designação cancelada',
+    'assignment_reassigned', 'Designação passada para outro colaborador', 'service_created', 'Serviço criado',
+    'service_updated', 'Serviço editado') ->> new.action, new.action);
+  perform public.log_event(new.company_id, 'auditoria',
+    case when new.action in ('collaborator_removed', 'assignment_cancelled') then 'warning' else 'info' end,
+    new.action, v_msg, 'audit_log', new.id::text, null, new.details);
+  return null;
+exception when others then
+  return null;
+end;
+$$;
+drop trigger if exists trg_system_log_audit on public.audit_log;
+create trigger trg_system_log_audit after insert on public.audit_log
+  for each row execute function public.log_from_audit();
+
+-- Eventos do app: conexão caiu/voltou, login, abertura, erro na tela.
+-- Visitante sem login só grava tentativa de login falha ou eventos da tela
+-- da cozinha (com o link dela). Limite de 30 por minuto por pessoa/IP.
+create or replace function public.log_client_event(
+  p_topic text, p_action text, p_message text, p_level text default 'info',
+  p_details jsonb default '{}'::jsonb, p_kitchen_token text default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  v_uid uuid := auth.uid();
+  v_company uuid;
+  v_ip text;
+  v_details jsonb := coalesce(p_details, '{}'::jsonb);
+  v_msg text := left(coalesce(p_message, ''), 500);
+begin
+  if p_topic not in ('rede', 'conta', 'erro', 'app', 'segurança') then return; end if;
+  if p_level not in ('info', 'warning', 'error') then return; end if;
+  if p_action not in ('session_start', 'logout', 'password_changed', 'login_failed', 'js_error', 'screen_crash',
+                      'unhandled_promise', 'connection_restored', 'network_changed', 'server_error',
+                      'server_unreachable', 'gps_lost', 'gps_back') then return; end if;
+  -- Ações de conta têm o texto montado aqui (o app não escolhe a frase).
+  v_msg := case p_action
+             when 'session_start' then 'Entrou no sistema (login ou app aberto)'
+             when 'logout' then 'Saiu do sistema'
+             when 'password_changed' then 'Criou ou trocou a senha pelo link do e-mail'
+             else v_msg end;
+  if jsonb_typeof(v_details) <> 'object' or pg_column_size(v_details) > 4000 then
+    v_details := jsonb_build_object('aviso', 'detalhes grandes demais');
+  end if;
+  select ip into v_ip from public.log_request_info();
+
+  if v_uid is not null then
+    select company_id into v_company from public.profiles where id = v_uid;
+    if p_topic = 'segurança' then return; end if;
+    -- Conta recém-criada sem empresa não escreve no log.
+    if v_company is null and not public.is_platform_admin() and p_action not in ('session_start', 'logout', 'password_changed') then
+      return;
+    end if;
+    if (select count(*) from public.system_log
+         where actor_id = v_uid and source = 'app' and created_at > now() - interval '1 minute') >= 30 then return; end if;
+  else
+    if v_ip is not null and (select count(*) from public.system_log
+         where actor_id is null and source = 'app' and ip = v_ip
+           and created_at > now() - interval '1 minute') >= 30 then return; end if;
+    -- Teto geral para quem não está logado (mesmo trocando de IP).
+    if (select count(*) from public.system_log
+         where actor_id is null and source = 'app' and created_at > now() - interval '1 minute') >= 300 then return; end if;
+    if p_topic = 'segurança' and p_action = 'login_failed' then
+      v_msg := 'Tentativa de login sem sucesso' || coalesce(' para ' || left(nullif(v_details ->> 'email', ''), 120), '');
+      v_details := jsonb_build_object('email', left(v_details ->> 'email', 120), 'erro', left(v_details ->> 'erro', 200),
+                                      'aparelho', v_details -> 'aparelho');
+      p_level := 'warning';
+    elsif p_kitchen_token is not null and p_topic in ('rede', 'erro', 'app') then
+      begin
+        v_company := public.kitchen_company(p_kitchen_token);
+      exception when others then
+        return;
+      end;
+      if v_company is null then return; end if;
+      perform set_config('app.log_actor', 'Tela da cozinha', true);
+    else
+      return;
+    end if;
+  end if;
+
+  perform public.log_event(v_company, p_topic, p_level, left(p_action, 60), v_msg, null, null, null, v_details, 'app');
+  perform set_config('app.log_actor', '', true);
+end;
+$$;
+
+-- Leitura para a tela da plataforma, com filtros e paginação.
+create or replace function public.platform_system_log(
+  p_company uuid default null, p_topics text[] default null, p_levels text[] default null,
+  p_search text default null, p_since timestamptz default null,
+  p_before bigint default null, p_after bigint default null, p_limit integer default 200)
+returns setof public.system_log language plpgsql stable security definer set search_path = public as $$
+declare v_q text := lower(nullif(trim(p_search), ''));
+begin
+  if not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  return query
+    select * from public.system_log l
+     where (p_company is null or l.company_id = p_company)
+       and (p_topics is null or cardinality(p_topics) = 0 or l.topic = any (p_topics))
+       and (p_levels is null or cardinality(p_levels) = 0 or l.level = any (p_levels))
+       and (p_since is null or l.created_at >= p_since)
+       and (p_before is null or l.id < p_before)
+       and (p_after is null or l.id > p_after)
+       and (v_q is null or position(v_q in lower(concat_ws(' ', l.message, l.actor_name, l.actor_email, l.company_name,
+                                                          l.ip, l.entity_id, l.action, l.details::text))) > 0)
+     order by l.id desc
+     limit least(greatest(coalesce(p_limit, 200), 1), 500);
+end;
+$$;
+
+-- Guarda 180 dias. pg_cron limpa de madrugada, se existir.
+create or replace function public.purge_system_log(p_days integer default 180)
+returns integer language plpgsql security definer set search_path = public as $$
+declare n integer;
+begin
+  if auth.uid() is not null and not public.is_platform_admin() then raise exception 'Sem permissão.'; end if;
+  delete from public.system_log where created_at < now() - make_interval(days => greatest(p_days, 30));
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    begin
+      execute $c$select cron.schedule('system-log-purge', '20 3 * * *', 'select public.purge_system_log()')$c$;
+    exception when others then
+      raise notice 'limpeza do log não agendada: %', sqlerrm;
+    end;
+  end if;
+end $$;
+
+revoke execute on function public.log_event(uuid, text, text, text, text, text, text, jsonb, jsonb, text) from public, anon, authenticated;
+revoke execute on function public.log_row_change() from public, anon, authenticated;
+revoke execute on function public.log_from_audit() from public, anon, authenticated;
+revoke execute on function public.log_person(uuid) from public, anon, authenticated;
+revoke execute on function public.purge_system_log(integer) from public, anon;
+revoke execute on function public.log_client_event(text, text, text, text, jsonb, text) from public;
+grant execute on function public.log_client_event(text, text, text, text, jsonb, text) to anon, authenticated;
+grant execute on function public.platform_system_log(uuid, text[], text[], text, timestamptz, bigint, bigint, integer) to authenticated;
+
+-- ---------------------------------------------------------------------
 -- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).
 -- O Supabase dá EXECUTE de toda função para anon. Aqui quem já podia
 -- (logado) continua podendo, e o visitante sem login só chama as funções
@@ -4168,7 +4682,8 @@ begin
     'get_rating_context(uuid)', 'submit_rating(uuid, integer, text)', 'get_rating_branding(uuid)',
     'kitchen_board(text)', 'kitchen_advance(uuid, text)',
     'is_platform_admin()', 'my_company_id()', 'my_company_role()', 'is_order_manager()',
-    'my_supervised_ids()', 'is_client_call()', 'profile_company(uuid)', 'service_company(uuid)']
+    'my_supervised_ids()', 'is_client_call()', 'profile_company(uuid)', 'service_company(uuid)',
+    'log_client_event(text, text, text, text, jsonb, text)']
   loop
     if to_regprocedure('public.' || f) is not null then
       begin
