@@ -3859,7 +3859,7 @@ create policy delivery_orders_courier_read on public.delivery_orders
 -- Logo da marca: só imagens comuns (SVG pode carregar script).
 do $$ begin
   update storage.buckets set allowed_mime_types = array['image/png', 'image/jpeg', 'image/webp'] where id = 'company-branding';
-exception when undefined_column then null;
+exception when others then raise notice 'tipos do bucket da marca não ajustados: %', sqlerrm;
 end $$;
 
 -- Foto/assinatura grava quem enviou mesmo se o app não mandar.
@@ -3983,10 +3983,14 @@ begin
     where n.nspname = 'public' and p.prokind = 'f'
       and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
   loop
-    if has_function_privilege('authenticated', r.fn, 'execute') then
-      execute format('grant execute on function %s to authenticated', r.fn);
-    end if;
-    execute format('revoke execute on function %s from public, anon', r.fn);
+    begin
+      if has_function_privilege('authenticated', r.fn, 'execute') then
+        execute format('grant execute on function %s to authenticated', r.fn);
+      end if;
+      execute format('revoke execute on function %s from public, anon', r.fn);
+    exception when others then
+      raise notice 'permissão não revisada em %: %', r.fn, sqlerrm;
+    end;
   end loop;
 end $$;
 
@@ -4000,7 +4004,11 @@ begin
     'my_supervised_ids()', 'is_client_call()', 'profile_company(uuid)', 'service_company(uuid)']
   loop
     if to_regprocedure('public.' || f) is not null then
-      execute format('grant execute on function public.%s to anon', f);
+      begin
+        execute format('grant execute on function public.%s to anon', f);
+      exception when others then
+        raise notice 'grant falhou em %: %', f, sqlerrm;
+      end;
     else
       raise notice 'função pública não encontrada: %', f;
     end if;
@@ -4018,9 +4026,14 @@ begin
     select p.oid::regprocedure as fn
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public' and p.prosecdef and p.proconfig is null
+      and pg_get_userbyid(p.proowner) = current_user
       and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
   loop
-    execute format('alter function %s set search_path = public, extensions', r.fn);
+    begin
+      execute format('alter function %s set search_path = public, extensions', r.fn);
+    exception when others then
+      raise notice 'search_path não fixado em %: %', r.fn, sqlerrm;
+    end;
   end loop;
 end $$;
 
