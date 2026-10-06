@@ -2922,5 +2922,355 @@ returns table(courier_id uuid, fee numeric) language sql stable security definer
 $$;
 grant execute on function public.my_courier_fees() to authenticated;
 
+-- =====================================================================
+-- DESPACHO AUTOMÁTICO
+-- Motoboy em expediente e livre recebe sozinho a próxima saída: começa
+-- pelo pedido que espera há mais tempo e junta os que ficam no caminho
+-- (até o máximo de entregas da empresa), na ordem de menor trajeto.
+-- Roda quando: pedido fica pronto, saída termina, motoboy entra/volta do
+-- expediente, pedido é criado; e a cada minuto (pg_cron, se houver) e a
+-- cada 30 s pelas telas abertas, como rede de segurança.
+-- =====================================================================
+alter table public.companies add column if not exists auto_dispatch boolean not null default false;
+alter table public.companies add column if not exists auto_max_stops integer not null default 3
+  check (auto_max_stops between 1 and 20);
+alter table public.companies add column if not exists auto_max_detour_km numeric(5,2) not null default 2
+  check (auto_max_detour_km between 0 and 50);
+alter table public.companies add column if not exists auto_hold_minutes integer not null default 0
+  check (auto_hold_minutes between 0 and 30);
+alter table public.companies add column if not exists auto_accept_minutes integer not null default 5
+  check (auto_accept_minutes between 0 and 60);
+alter table public.companies add column if not exists auto_dispatch_when text not null default 'ready'
+  check (auto_dispatch_when in ('ready', 'any'));
+
+alter table public.courier_shifts add column if not exists paused boolean not null default false;
+alter table public.courier_shifts add column if not exists paused_reason text;
+alter table public.delivery_runs add column if not exists auto boolean not null default false;
+
+-- Distância em linha reta (km).
+create or replace function public.geo_km(lat1 double precision, lng1 double precision,
+                                         lat2 double precision, lng2 double precision)
+returns double precision language sql immutable as $$
+  select 2 * 6371 * asin(sqrt(
+    power(sin(radians(lat2 - lat1) / 2), 2)
+    + cos(radians(lat1)) * cos(radians(lat2)) * power(sin(radians(lng2 - lng1) / 2), 2)))
+$$;
+
+-- Tira um motoboy das saídas que ele ainda não iniciou (pedidos voltam à fila).
+create or replace function public.release_planned_runs(p_courier uuid)
+returns integer language plpgsql security definer as $$
+declare n integer := 0; r record;
+begin
+  for r in select id from public.delivery_runs where courier_id = p_courier and status = 'planned' for update loop
+    update public.delivery_orders
+      set run_id = null, courier_id = null, stop_sequence = null, courier_fee = null
+      where run_id = r.id and status in ('received', 'preparing', 'ready');
+    update public.delivery_runs set status = 'cancelled', finished_at = now() where id = r.id;
+    n := n + 1;
+  end loop;
+  return n;
+end;
+$$;
+revoke execute on function public.release_planned_runs(uuid) from public, anon, authenticated;
+
+create or replace function public.auto_dispatch(p_company uuid)
+returns integer language plpgsql security definer as $$
+declare
+  c record;
+  r record;
+  v_courier uuid;
+  v_since timestamptz;
+  -- candidatos
+  cid uuid[]; clat double precision[]; clng double precision[]; csince timestamptz[];
+  used boolean[];
+  -- rota (sem a loja)
+  rid uuid[]; rlat double precision[]; rlng double precision[];
+  slat double precision; slng double precision;
+  i int; k int; best_i int; best_k int; best_cost double precision; cost double precision;
+  plat double precision; plng double precision; nlat double precision; nlng double precision;
+  v_run uuid;
+  v_fee numeric;
+  v_count int := 0;
+begin
+  if coalesce(current_setting('app.auto_dispatch_running', true), '') = '1' then return 0; end if;
+  select * into c from public.companies where id = p_company;
+  if c.id is null or not c.auto_dispatch or c.status <> 'active' then return 0; end if;
+  -- Um despacho por empresa por vez; se outro está rodando, ele cobre este.
+  if not pg_try_advisory_xact_lock(hashtext('auto_dispatch:' || p_company::text)) then return 0; end if;
+  perform set_config('app.auto_dispatch_running', '1', true);
+
+  -- 1) Saída automática não iniciada no prazo: pedidos voltam e o motoboy
+  --    fica em pausa até tocar em "Voltar a receber".
+  if c.auto_accept_minutes > 0 then
+    for r in select dr.id, dr.courier_id, p.name from public.delivery_runs dr join public.profiles p on p.id = dr.courier_id
+             where dr.company_id = p_company and dr.auto and dr.status = 'planned'
+               and dr.created_at < now() - make_interval(mins => c.auto_accept_minutes) loop
+      perform public.release_planned_runs(r.courier_id);
+      update public.courier_shifts set paused = true, paused_reason = 'Não iniciou a saída a tempo'
+        where courier_id = r.courier_id and ended_at is null;
+      insert into public.notifications (company_id, user_id, type, title, message)
+        values (p_company, r.courier_id, 'auto_paused', 'Você foi pausado',
+                'A saída não foi iniciada a tempo e foi passada para outro motoboy. Toque em "Voltar a receber" quando puder.');
+      perform public.notify_company_managers(p_company, 'auto_timeout', 'Saída não iniciada',
+        coalesce(r.name, 'Motoboy') || ' não iniciou a saída a tempo; os pedidos voltaram para a fila automática.');
+    end loop;
+  end if;
+
+  slat := c.store_lat; slng := c.store_lng;
+
+  -- 2) Uma saída por motoboy livre, do que espera há mais tempo.
+  loop
+    select s.courier_id into v_courier
+      from public.courier_shifts s join public.profiles p on p.id = s.courier_id
+      where s.company_id = p_company and s.ended_at is null and not s.paused
+        and p.company_id = p_company and p.company_role = 'collaborator'
+        and not exists (select 1 from public.delivery_runs dr
+                        where dr.courier_id = s.courier_id and dr.status in ('planned', 'in_progress'))
+      order by greatest(s.started_at, coalesce((select max(dr.finished_at) from public.delivery_runs dr
+                                                where dr.courier_id = s.courier_id), '-infinity'::timestamptz)),
+               s.started_at
+      limit 1;
+    exit when v_courier is null;
+
+    select array_agg(o.id order by o.since, o.number), array_agg(o.lat order by o.since, o.number),
+           array_agg(o.lng order by o.since, o.number), array_agg(o.since order by o.since, o.number)
+      into cid, clat, clng, csince
+      from (select x.id, x.number, x.lat, x.lng,
+                   case when c.auto_dispatch_when = 'ready' then coalesce(x.ready_at, x.created_at) else x.created_at end as since
+            from public.delivery_orders x
+            where x.company_id = p_company and x.run_id is null and x.lat is not null and x.lng is not null
+              and x.status in ('received', 'preparing', 'ready')
+              and (c.auto_dispatch_when = 'any' or x.status = 'ready')) o;
+    exit when cid is null;
+    -- O mais antigo precisa ter esperado o tempo mínimo (para juntar pedidos).
+    exit when csince[1] > now() - make_interval(mins => c.auto_hold_minutes);
+
+    used := array_fill(false, array[array_length(cid, 1)]);
+    used[1] := true;
+    rid := array[cid[1]]; rlat := array[clat[1]]; rlng := array[clng[1]];
+
+    -- Inserção mais barata: junta o pedido que menos aumenta o trajeto
+    -- (loja → paradas → loja), enquanto o desvio couber no limite.
+    while array_length(rid, 1) < c.auto_max_stops loop
+      best_cost := null;
+      for i in 1 .. array_length(cid, 1) loop
+        continue when used[i];
+        for k in 0 .. array_length(rid, 1) loop
+          if k = 0 then plat := coalesce(slat, rlat[1]); plng := coalesce(slng, rlng[1]);
+          else plat := rlat[k]; plng := rlng[k]; end if;
+          if k = array_length(rid, 1) then nlat := coalesce(slat, rlat[1]); nlng := coalesce(slng, rlng[1]);
+          else nlat := rlat[k + 1]; nlng := rlng[k + 1]; end if;
+          cost := public.geo_km(plat, plng, clat[i], clng[i]) + public.geo_km(clat[i], clng[i], nlat, nlng)
+                  - public.geo_km(plat, plng, nlat, nlng);
+          if best_cost is null or cost < best_cost - 1e-9 then best_cost := cost; best_i := i; best_k := k; end if;
+        end loop;
+      end loop;
+      -- 1,3 ≈ ruas em vez de linha reta.
+      exit when best_cost is null or best_cost * 1.3 > c.auto_max_detour_km;
+      rid := rid[1:best_k] || cid[best_i] || rid[best_k + 1:];
+      rlat := rlat[1:best_k] || clat[best_i] || rlat[best_k + 1:];
+      rlng := rlng[1:best_k] || clng[best_i] || rlng[best_k + 1:];
+      used[best_i] := true;
+    end loop;
+
+    -- A volta é fechada (loja → ... → loja), então os dois sentidos têm o
+    -- mesmo trajeto: usa o que entrega antes o pedido mais antigo.
+    k := array_position(rid, cid[1]);
+    i := array_length(rid, 1);
+    if k > i + 1 - k or (k = i + 1 - k and slat is not null
+        and public.geo_km(slat, slng, rlat[i], rlng[i]) < public.geo_km(slat, slng, rlat[1], rlng[1])) then
+      select array_agg(rid[j] order by j desc), array_agg(rlat[j] order by j desc), array_agg(rlng[j] order by j desc)
+        into rid, rlat, rlng from generate_subscripts(rid, 1) j;
+    end if;
+
+    insert into public.delivery_runs (company_id, courier_id, created_by, strict_route, auto)
+      values (p_company, v_courier, null, c.strict_route_mode, true) returning id into v_run;
+    v_fee := public.courier_order_fee(v_courier);
+    for i in 1 .. array_length(rid, 1) loop
+      update public.delivery_orders set run_id = v_run, courier_id = v_courier, stop_sequence = i, courier_fee = v_fee
+        where id = rid[i] and run_id is null;
+    end loop;
+    insert into public.notifications (company_id, user_id, type, title, message)
+      values (p_company, v_courier, 'new_run', 'Nova saída de entrega',
+              array_length(rid, 1) || ' parada(s) aguardando você.');
+    v_count := v_count + 1;
+    v_courier := null;
+  end loop;
+
+  perform set_config('app.auto_dispatch_running', '0', true);
+  return v_count;
+end;
+$$;
+revoke execute on function public.auto_dispatch(uuid) from public, anon, authenticated;
+
+-- Telas abertas (gestor e motoboy) chamam a cada 30 s: rede de segurança.
+create or replace function public.auto_dispatch_tick()
+returns integer language plpgsql security definer as $$
+begin
+  if public.my_company_id() is null then return 0; end if;
+  return public.auto_dispatch(public.my_company_id());
+end;
+$$;
+grant execute on function public.auto_dispatch_tick() to authenticated;
+
+create or replace function public.auto_dispatch_all()
+returns integer language plpgsql security definer as $$
+declare v uuid; n integer := 0;
+begin
+  for v in select id from public.companies where auto_dispatch and status = 'active' loop
+    begin
+      n := n + public.auto_dispatch(v);
+    exception when others then
+      raise warning 'Despacho automático falhou na empresa %: %', v, sqlerrm;
+    end;
+  end loop;
+  return n;
+end;
+$$;
+revoke execute on function public.auto_dispatch_all() from public, anon, authenticated;
+
+-- Gatilhos: um erro no despacho nunca impede a ação de quem disparou.
+create or replace function public.auto_dispatch_kick()
+returns trigger language plpgsql security definer as $$
+begin
+  begin
+    perform public.auto_dispatch(coalesce(new.company_id, old.company_id));
+  exception when others then
+    raise warning 'Despacho automático falhou: %', sqlerrm;
+  end;
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_auto_dispatch_orders on public.delivery_orders;
+create trigger trg_auto_dispatch_orders after update on public.delivery_orders
+  for each row when (new.run_id is null and new.status in ('received', 'preparing', 'ready')
+                     and (old.status is distinct from new.status or old.run_id is not null))
+  execute function public.auto_dispatch_kick();
+drop trigger if exists trg_auto_dispatch_runs on public.delivery_runs;
+create trigger trg_auto_dispatch_runs after update on public.delivery_runs
+  for each row when (new.status in ('finished', 'cancelled') and old.status is distinct from new.status)
+  execute function public.auto_dispatch_kick();
+drop trigger if exists trg_auto_dispatch_shifts on public.courier_shifts;
+create trigger trg_auto_dispatch_shifts after insert or update on public.courier_shifts
+  for each row execute function public.auto_dispatch_kick();
+drop trigger if exists trg_auto_dispatch_company on public.companies;
+create or replace function public.auto_dispatch_kick_company()
+returns trigger language plpgsql security definer as $$
+begin
+  begin
+    perform public.auto_dispatch(new.id);
+  exception when others then
+    raise warning 'Despacho automático falhou: %', sqlerrm;
+  end;
+  return null;
+end;
+$$;
+create trigger trg_auto_dispatch_company after update on public.companies
+  for each row when (new.auto_dispatch and (old.auto_dispatch is distinct from new.auto_dispatch
+                     or old.auto_max_stops is distinct from new.auto_max_stops
+                     or old.auto_max_detour_km is distinct from new.auto_max_detour_km
+                     or old.auto_hold_minutes is distinct from new.auto_hold_minutes
+                     or old.auto_dispatch_when is distinct from new.auto_dispatch_when))
+  execute function public.auto_dispatch_kick_company();
+
+-- Pedido criado pelo app entra na fila automática na hora.
+create or replace function public.create_delivery_order(p_order jsonb, p_items jsonb)
+returns uuid language plpgsql as $$
+declare v_id uuid;
+begin
+  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'Adicione ao menos um produto ao pedido.';
+  end if;
+  insert into public.delivery_orders (
+    company_id, source, customer_id, customer_name, customer_phone,
+    address_street, address_number, address_complement, address_neighborhood, address_city, lat, lng,
+    delivery_fee, payment_method, change_for, notes)
+  values (
+    public.my_company_id(), coalesce(nullif(p_order->>'source', ''), 'balcao'),
+    nullif(p_order->>'customer_id', '')::uuid, btrim(p_order->>'customer_name'), nullif(p_order->>'customer_phone', ''),
+    nullif(p_order->>'address_street', ''), nullif(p_order->>'address_number', ''), nullif(p_order->>'address_complement', ''),
+    nullif(p_order->>'address_neighborhood', ''), nullif(p_order->>'address_city', ''),
+    nullif(p_order->>'lat', '')::double precision, nullif(p_order->>'lng', '')::double precision,
+    nullif(p_order->>'delivery_fee', '')::numeric, nullif(p_order->>'payment_method', ''),
+    nullif(p_order->>'change_for', '')::numeric, nullif(p_order->>'notes', ''))
+  returning id into v_id;
+  perform public.set_order_items(v_id, p_items);
+  begin
+    perform public.auto_dispatch_tick();
+  exception when others then
+    raise warning 'Despacho automático falhou: %', sqlerrm;
+  end;
+  return v_id;
+end;
+$$;
+
+-- ---------------------------------------------------------------------
+-- Expediente do motoboy (disponível para receber saídas automáticas)
+-- ---------------------------------------------------------------------
+-- Encerrar: o próprio motoboy ou o admin. Saídas ainda não iniciadas
+-- voltam para a fila; a saída em andamento continua até o fim.
+create or replace function public.end_shift(p_shift uuid default null)
+returns void language plpgsql security definer as $$
+declare v record;
+begin
+  select * into v from public.courier_shifts s
+    where s.ended_at is null
+      and (case when p_shift is null then s.courier_id = auth.uid() else s.id = p_shift end);
+  if v.id is null then raise exception 'Nenhum expediente aberto.'; end if;
+  if v.courier_id <> auth.uid() and not (v.company_id = public.my_company_id() and public.is_order_manager()) then
+    raise exception 'Sem permissão para encerrar este expediente.';
+  end if;
+  -- Fecha antes de devolver a saída, senão o despacho daria a ela de novo.
+  update public.courier_shifts set ended_at = now(), closed_by = auth.uid(),
+         km = public.courier_km(v.courier_id, v.started_at, now())
+    where id = v.id;
+  perform public.release_planned_runs(v.courier_id);
+end;
+$$;
+grant execute on function public.end_shift(uuid) to authenticated;
+
+-- Pausa / volta a receber: o próprio motoboy ou o gestor.
+create or replace function public.set_shift_paused(p_paused boolean, p_courier uuid default null)
+returns void language plpgsql security definer as $$
+declare v record;
+begin
+  select * into v from public.courier_shifts s
+    where s.ended_at is null and s.courier_id = coalesce(p_courier, auth.uid());
+  if v.id is null then raise exception 'Nenhum expediente aberto.'; end if;
+  if v.courier_id <> auth.uid() and not (v.company_id = public.my_company_id() and public.is_order_manager()) then
+    raise exception 'Sem permissão.';
+  end if;
+  update public.courier_shifts set paused = p_paused,
+    paused_reason = case when p_paused then case when v.courier_id = auth.uid() then 'Pausa' else 'Pausado pelo gestor' end end
+    where id = v.id;
+  if p_paused then perform public.release_planned_runs(v.courier_id); end if;
+end;
+$$;
+grant execute on function public.set_shift_paused(boolean, uuid) to authenticated;
+
+-- Gestores (admin e supervisor) veem quem está em expediente.
+drop policy if exists courier_shifts_read on public.courier_shifts;
+create policy courier_shifts_read on public.courier_shifts
+  for select using (
+    courier_id = auth.uid()
+    or (company_id = public.my_company_id() and public.is_order_manager())
+    or public.is_platform_admin()
+  );
+
+-- Rede de segurança no servidor: pg_cron chama o despacho a cada minuto
+-- (se a extensão não estiver disponível, as telas abertas cobrem).
+do $$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    begin
+      execute 'create extension if not exists pg_cron';
+      execute $c$select cron.schedule('auto-dispatch', '* * * * *', 'select public.auto_dispatch_all()')$c$;
+    exception when others then
+      raise notice 'pg_cron indisponível (%); o despacho automático segue pelos gatilhos e pelas telas abertas.', sqlerrm;
+    end;
+  end if;
+end $$;
+
 -- Atualiza o cache do Supabase (evita "Could not find the column ... in the schema cache").
 notify pgrst, 'reload schema';

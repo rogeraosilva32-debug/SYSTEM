@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  Box, Typography, Button, TextField, Switch, CircularProgress, IconButton, Alert, Chip,
+  Box, Typography, Button, TextField, Switch, CircularProgress, IconButton, Alert, Chip, MenuItem,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import supabase from "../../services/supabase";
@@ -36,6 +36,58 @@ function StoreAddress({ company, onSaved }) {
       <DeliveryAddressField value={addr} onChange={setAddr} store={null} mapHeight={220} />
       <Button variant="contained" sx={{ mt: 1.5 }} onClick={save}>Salvar endereço da loja</Button>
     </Box>
+  );
+}
+
+// Despacho automático: limites que a empresa define.
+function AutoDispatch({ company, onSave }) {
+  const [form, setForm] = useState({
+    auto_max_stops: company.auto_max_stops ?? 3, auto_max_detour_km: String(company.auto_max_detour_km ?? 2).replace(".", ","),
+    auto_hold_minutes: company.auto_hold_minutes ?? 0, auto_accept_minutes: company.auto_accept_minutes ?? 5,
+    auto_dispatch_when: company.auto_dispatch_when || "ready",
+  });
+  if (company.auto_dispatch === undefined) {
+    return <Alert severity="warning">Rode de novo o supabase-b2b-schema.sql no Supabase para liberar o despacho automático.</Alert>;
+  }
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const save = () => onSave({
+    auto_max_stops: Number(form.auto_max_stops), auto_max_detour_km: Number(String(form.auto_max_detour_km).replace(",", ".")),
+    auto_hold_minutes: Number(form.auto_hold_minutes), auto_accept_minutes: Number(form.auto_accept_minutes),
+    auto_dispatch_when: form.auto_dispatch_when,
+  });
+  return (
+    <>
+      <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2 }}>
+        <Box>
+          <Typography sx={{ fontWeight: 700, fontSize: 14 }}>Despachar sozinho para os motoboys em expediente</Typography>
+          <Typography sx={{ fontSize: 12.5, color: "#78716C", maxWidth: 540 }}>
+            Quando um motoboy em expediente fica livre, o sistema monta a saída começando pelo pedido que espera há mais
+            tempo e junta os que ficam no caminho, na ordem de menor trajeto. Você ainda pode despachar à mão.
+          </Typography>
+        </Box>
+        <Switch checked={company.auto_dispatch} slotProps={{ input: { "aria-label": "Despacho automático" } }} onChange={(e) => onSave({ auto_dispatch: e.target.checked })} />
+      </Box>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5, mt: 2 }}>
+        <TextField size="small" type="number" label="Máximo de entregas por saída" value={form.auto_max_stops}
+          onChange={set("auto_max_stops")} inputProps={{ min: 1, max: 20 }}
+          helperText="Limite. A saída só junta pedidos que ficam no caminho." />
+        <TextField size="small" label="Desvio máximo para juntar um pedido (km)" value={form.auto_max_detour_km}
+          onChange={set("auto_max_detour_km")} inputMode="decimal"
+          helperText="Quanto o trajeto pode aumentar para levar mais um pedido." />
+        <TextField select size="small" label="Despachar pedidos" value={form.auto_dispatch_when} onChange={set("auto_dispatch_when")}
+          helperText=" ">
+          <MenuItem value="ready">Quando marcados como prontos</MenuItem>
+          <MenuItem value="any">Assim que chegam (sem esperar ficar pronto)</MenuItem>
+        </TextField>
+        <TextField size="small" type="number" label="Esperar para juntar pedidos (min)" value={form.auto_hold_minutes}
+          onChange={set("auto_hold_minutes")} inputProps={{ min: 0, max: 30 }}
+          helperText="0 = sai assim que houver motoboy livre." />
+        <TextField size="small" type="number" label="Prazo para o motoboy iniciar a saída (min)" value={form.auto_accept_minutes}
+          onChange={set("auto_accept_minutes")} inputProps={{ min: 0, max: 60 }}
+          helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." />
+      </Box>
+      <Button variant="outlined" sx={{ mt: 1.5 }} onClick={save}>Salvar limites</Button>
+    </>
   );
 }
 
@@ -129,6 +181,10 @@ export function DeliverySettingsTab() {
             onChange={(e) => setMeters(e.target.value)} sx={{ width: 300 }} inputProps={{ min: 50, max: 5000 }} />
           <Button variant="outlined" onClick={() => updateCompany({ off_route_meters: Number(meters) })}>Salvar</Button>
         </Box>
+      </Section>
+
+      <Section title="Despacho automático">
+        <AutoDispatch key={`${company.id}-${company.auto_max_stops}-${company.auto_max_detour_km}`} company={company} onSave={updateCompany} />
       </Section>
 
       <Section title="Taxa do motoboy">

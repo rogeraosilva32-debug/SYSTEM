@@ -605,6 +605,46 @@ function RunDialog({ open, onClose, onDone, couriers, available, run, courierFee
   );
 }
 
+// ───────────────────────── Motoboys em expediente ─────────────────────────
+function ShiftPanel({ shifts, couriers, runs, onChanged }) {
+  const [error, setError] = useState("");
+  if (!shifts.length) return null;
+  const act = async (fn) => {
+    setError("");
+    const { error: err } = await fn();
+    if (err) setError(err.message);
+    onChanged();
+  };
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: "#78716C", mb: 1 }}>EM EXPEDIENTE</Typography>
+      {error && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>{error}</Alert>}
+      <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+        {shifts.map((sh) => {
+          const name = couriers.find((c) => c.id === sh.courier_id)?.name || "Motoboy";
+          const run = runs.find((r) => r.courier_id === sh.courier_id);
+          const state = sh.paused ? "Em pausa" : run ? (run.status === "planned" ? "Saída aguardando" : "Em rota") : "Livre";
+          const color = sh.paused ? "#B0793D" : run ? "#4F5BA6" : "#4B7A5E";
+          return (
+            <Box key={sh.id} sx={{ display: "flex", alignItems: "center", gap: 1, px: 1.2, py: 0.6, border: "1px solid #E7E5E4", borderRadius: "10px", background: "#fff" }}>
+              <Box>
+                <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{name}</Typography>
+                <Typography sx={{ fontSize: 11, fontWeight: 700, color }}>{state}{sh.paused && sh.paused_reason ? ` · ${sh.paused_reason}` : ""}</Typography>
+              </Box>
+              <Button size="small" onClick={() => act(() => supabase.rpc("set_shift_paused", { p_paused: !sh.paused, p_courier: sh.courier_id }))}>
+                {sh.paused ? "Liberar" : "Pausar"}
+              </Button>
+              <Button size="small" color="inherit" onClick={() => { if (window.confirm(`Encerrar o expediente de ${name}?`)) act(() => supabase.rpc("end_shift", { p_shift: sh.id })); }}>
+                Encerrar
+              </Button>
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
+
 // ───────────────────────── Aba principal ─────────────────────────
 export function OrdersTab() {
   const { companyId } = useAuth();
@@ -615,6 +655,7 @@ export function OrdersTab() {
   const [company, setCompany] = useState(null);
   const [menu, setMenu] = useState({ items: [], addons: [] });
   const [courierFees, setCourierFees] = useState({});
+  const [shifts, setShifts] = useState([]);
   const [deliveredToday, setDeliveredToday] = useState(0);
   const [selected, setSelected] = useState(new Set());
   const [showNew, setShowNew] = useState(false);
@@ -624,7 +665,7 @@ export function OrdersTab() {
 
   const load = useCallback(async () => {
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-    const [o, r, z, c, comp, d, cats, prods, fees] = await Promise.all([
+    const [o, r, z, c, comp, d, cats, prods, fees, sh] = await Promise.all([
       supabase.from("delivery_orders").select("*, courier:courier_id(name)").eq("company_id", companyId)
         .in("status", COLUMNS).order("created_at"),
       supabase.from("delivery_runs").select("*, courier:courier_id(name)").eq("company_id", companyId)
@@ -637,7 +678,9 @@ export function OrdersTab() {
       supabase.from("product_categories").select("id, name, sort_order, active").eq("company_id", companyId),
       supabase.from("products").select("*").eq("company_id", companyId).eq("active", true).order("sort_order").order("name"),
       supabase.rpc("my_courier_fees"),
+      supabase.from("courier_shifts").select("id, courier_id, started_at, paused, paused_reason").eq("company_id", companyId).is("ended_at", null).order("started_at"),
     ]);
+    setShifts(sh.data || []);
     // Cardápio do pedido: só produtos ativos de categorias visíveis, na ordem das categorias.
     const catList = (cats.data || []).slice().sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
     const catIndex = new Map(catList.map((cat, i) => [cat.id, i]));
@@ -671,8 +714,10 @@ export function OrdersTab() {
     const channel = supabase.channel(`orders-${companyId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_orders", filter: `company_id=eq.${companyId}` }, schedule)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_runs", filter: `company_id=eq.${companyId}` }, schedule)
+      .on("postgres_changes", { event: "*", schema: "public", table: "courier_shifts", filter: `company_id=eq.${companyId}` }, schedule)
       .subscribe();
-    const interval = setInterval(load, 30000);
+    // Rede de segurança do despacho automático (o banco também despacha sozinho).
+    const interval = setInterval(() => { supabase.rpc("auto_dispatch_tick").then(load); }, 30000);
     return () => { clearTimeout(reloadTimer.current); clearInterval(interval); supabase.removeChannel(channel); };
   }, [companyId, load]);
 
@@ -707,6 +752,7 @@ export function OrdersTab() {
           Entregues hoje: {deliveredToday}
         </Typography>
       </Box>
+      <ShiftPanel shifts={shifts} couriers={couriers} runs={runs} onChanged={load} />
       {zones.length === 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>Cadastre os bairros atendidos e as taxas na aba “Entregas: ajustes” para a taxa ser preenchida sozinha.</Alert>
       )}
@@ -754,6 +800,7 @@ export function OrdersTab() {
             <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
               <Typography sx={{ fontWeight: 800 }}>🛵 {r.courier?.name}</Typography>
               <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+                {r.auto && <Chip size="small" label="Automática" sx={{ height: 20, fontSize: 10.5, fontWeight: 700 }} />}
                 {r.strict_route && <Chip size="small" label="Rota exata" sx={{ height: 20, fontSize: 10.5, fontWeight: 700 }} />}
                 <Chip size="small" label={r.status === "planned" ? "Aguardando saída" : "Em rota"} sx={{ height: 20, fontSize: 10.5, fontWeight: 700 }} />
                 <Button size="small" onClick={() => setRunDialog({ open: true, run: r })}>Editar</Button>

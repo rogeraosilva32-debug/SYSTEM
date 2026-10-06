@@ -572,3 +572,22 @@ Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.
   Desliga em "Entregas: ajustes".
 - **Cardápio inicial**: `supabase/seeds/cardapio-pantera-lanches.sql` (rodar
   depois do schema; ajuste o nome da empresa na primeira linha do bloco).
+
+## 31. Expediente e despacho automático
+
+- **Expediente** (app do motoboy): "Iniciar expediente", "Pausar" / "Voltar a
+  receber" e "Encerrar expediente". O gestor vê quem está em expediente na
+  fila de pedidos e pode pausar, liberar ou encerrar.
+- **Despacho automático** ("Entregas: ajustes"): quando um motoboy em
+  expediente fica livre, o banco (`auto_dispatch`) monta a saída começando
+  pelo pedido que espera há mais tempo e junta os que ficam no caminho
+  (inserção mais barata no trajeto loja → paradas → loja), respeitando o
+  máximo de entregas e o desvio máximo da empresa. Não enche até o máximo:
+  só junta o que compensa.
+- **Quando roda**: pedido fica pronto (ou chega, se configurado), saída
+  termina, motoboy entra/volta do expediente, ajustes mudam; e a cada minuto
+  pelo pg_cron (se disponível) e a cada 30 s pelas telas abertas.
+- **Falhas cobertas**: um despacho por empresa por vez (trava), erro no
+  despacho nunca bloqueia a ação do motoboy/gestor, saída não iniciada no
+  prazo volta para a fila e o motoboy fica em pausa, pausar/encerrar devolve
+  a saída ainda não iniciada.
