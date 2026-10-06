@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Box, Typography, Button, CircularProgress, Alert, TextField, MenuItem, Chip,
+  Box, Typography, Button, Alert, TextField, MenuItem, Chip,
 } from "@mui/material";
 import { MapContainer, TileLayer, Marker, Polyline, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -19,6 +19,7 @@ import {
   distanceToPath, ROUTE_COLORS, ROUTE_NAMES, GOOGLE_MAX_WAYPOINTS,
 } from "../utils/delivery";
 import { fetchMultiStopRoute } from "../utils/geocoding";
+import PageLoading from "../components/PageLoading";
 
 const PING_INTERVAL_MS = 15000;
 const PROBLEMS = ["Cliente não atende", "Endereço não encontrado", "Cliente recusou o pedido", "Pedido danificado", "Outro"];
@@ -155,7 +156,7 @@ function ShiftBar({ shift, unavailable, onChange, onError }) {
           )}
           <Button size="small" variant={shift ? "outlined" : "contained"} color={shift ? "error" : "primary"} disabled={busy}
             onClick={() => {
-              if (shift && !window.confirm("Encerrar o expediente? Você para de receber saídas e a saída ainda não iniciada volta para a fila.")) return;
+              if (shift && !window.confirm("Encerrar o expediente? Você para de receber saídas, e as entregas que ainda não foram finalizadas voltam para a fila da loja.")) return;
               run(() => supabase.rpc(shift ? "end_shift" : "start_shift"));
             }}>
             {shift ? "Encerrar expediente" : "Iniciar expediente"}
@@ -360,7 +361,7 @@ export default function CourierDeliveries() {
   if (legOrigin) mapPoints.push([legOrigin.lat, legOrigin.lng]);
   if (currentStop?.lat) mapPoints.push([currentStop.lat, currentStop.lng]);
 
-  if (runs === null) return <AppShell title="Minhas entregas"><Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box></AppShell>;
+  if (runs === null) return <AppShell title="Minhas entregas"><PageLoading /></AppShell>;
 
   return (
     <AppShell title="Minhas entregas">

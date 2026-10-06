@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { Box, Typography, IconButton, Chip, CircularProgress } from "@mui/material";
+import { Box, Typography, IconButton, Chip } from "@mui/material";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import supabase from "../services/supabase";
+import PageLoading from "./PageLoading";
 
 const STATUS_COLOR = {
   scheduled: { bg: "#F5F5F4", fg: "#57534E" },
@@ -88,7 +89,7 @@ export default function AssignmentCalendar({ companyId, onOpen }) {
       </Box>
 
       {assignments === null ? (
-        <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={22} /></Box>
+        <PageLoading />
       ) : (
         <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(7, 1fr)" }, gap: 1 }}>
           {days.map((d) => {

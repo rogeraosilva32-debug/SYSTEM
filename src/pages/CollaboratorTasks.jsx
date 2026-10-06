@@ -14,6 +14,7 @@ import InfoField from "../components/InfoField";
 import SignaturePad from "../components/SignaturePad";
 import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
+import PageLoading from "../components/PageLoading";
 
 const STATUS_LABEL = {
   scheduled: "Agendada", en_route: "A caminho", in_progress: "Em andamento",
@@ -125,7 +126,7 @@ export default function CollaboratorTasks() {
   return (
     <AppShell title="Minhas tarefas">
       {tasks === null ? (
-        <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>
+        <PageLoading />
       ) : tasks.length === 0 ? (
         <Box sx={{ py: 8, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>
           Nenhuma tarefa designada pra você ainda.

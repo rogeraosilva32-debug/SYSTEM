@@ -9,6 +9,7 @@ import RoleRoute, { homeForCurrentUser } from "./components/RoleRoute";
 import { passwordRecovery } from "./services/supabase";
 import PageTransition from "./components/PageTransition";
 import BrandLoader from "./components/BrandLoader";
+import { RouteLoading } from "./components/PageLoading";
 
 import Welcome from "./pages/Welcome";
 import Login from "./pages/Login";
@@ -68,7 +69,7 @@ function AnimatedApp() {
   return (
     <AnimatePresence initial={false}>
       <PageTransition routeKey={location.pathname}>
-        <Suspense fallback={<BrandLoader />}>
+        <Suspense fallback={<RouteLoading />}>
           <ErrorBoundary key={location.pathname}>
           <Routes location={location}>
             <Route path="/" element={<RootRoute />} />

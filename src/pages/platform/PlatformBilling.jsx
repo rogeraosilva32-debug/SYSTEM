@@ -8,6 +8,7 @@ import supabase from "../../services/supabase";
 import { money } from "../../utils/delivery";
 import { today, formatDate, downloadCsv } from "../../utils/reports";
 import { Stat, StatGrid, Section } from "../../components/ReportParts";
+import PageLoading from "../../components/PageLoading";
 
 const dateTime = (iso) => (iso ? new Date(iso).toLocaleDateString("pt-BR") : "—");
 
@@ -23,7 +24,7 @@ export function LicenseUsage({ onOpenCompany }) {
     });
   }, []);
 
-  if (rows === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (rows === null) return <PageLoading />;
 
   const active = rows.filter((r) => r.status === "active");
   const seatsUsed = rows.reduce((s, r) => s + Number(r.seats_used), 0);

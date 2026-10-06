@@ -12,6 +12,7 @@ import CollapsibleSection from "../../components/CollapsibleSection";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { money, parsePrice } from "../../utils/delivery";
+import PageLoading from "../../components/PageLoading";
 
 function Section({ title, action, children }) {
   return (
@@ -308,7 +309,7 @@ export function MenuTab() {
     load();
   };
 
-  if (categories === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (categories === null) return <PageLoading />;
 
   const row = (p, list, i) => (
     <Box key={p.id} sx={{ display: "flex", alignItems: "center", gap: 1, py: 0.9, borderTop: "1px solid #F5F5F4", opacity: p.active ? 1 : 0.5 }}>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  Box, Typography, Button, TextField, Switch, CircularProgress, IconButton, Alert, Chip, MenuItem,
+  Box, Typography, Button, TextField, Switch, IconButton, Alert, Chip, MenuItem,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import CollapsibleSection, { MoreOptions } from "../../components/CollapsibleSection";
@@ -9,6 +9,7 @@ import { useAuth } from "../../context/AuthContext";
 import { money, parsePrice } from "../../utils/delivery";
 import DeliveryAddressField from "../../components/DeliveryAddressField";
 import { refreshCompanySettings } from "../../hooks/useCompanySettings";
+import PageLoading from "../../components/PageLoading";
 
 // Endereço da loja: ponto de partida das rotas e referência das buscas.
 function StoreAddress({ company, onSaved }) {
@@ -238,7 +239,7 @@ export function DeliverySettingsTab() {
   };
 
   if (company === false) return <Alert severity="error">{error}</Alert>;
-  if (!company) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (!company) return <PageLoading />;
 
   return (
     <Box sx={{ maxWidth: 760 }}>

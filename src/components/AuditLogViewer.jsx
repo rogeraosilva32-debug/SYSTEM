@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Box, Typography, CircularProgress, Button } from "@mui/material";
 import supabase from "../services/supabase";
+import PageLoading from "./PageLoading";
 
 const ACTION_LABEL = {
   collaborator_removed: "Colaborador removido",
@@ -46,7 +47,7 @@ export default function AuditLogViewer({ companyId }) {
     setHasMore((data || []).length === PAGE_SIZE);
   };
 
-  if (entries === null) return <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box>;
+  if (entries === null) return <PageLoading />;
   if (entries.length === 0) return <Box sx={{ py: 6, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>Nenhum evento registrado ainda.</Box>;
 
   return (

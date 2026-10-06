@@ -5172,6 +5172,97 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
+-- FIM DO EXPEDIENTE NO MEIO DA ENTREGA (06/10/2026).
+-- Antes só a saída ainda não iniciada voltava para a fila; a saída em
+-- andamento ficava presa no motoboy que saiu. Agora, ao encerrar o
+-- expediente (ou remover o colaborador), o que não foi entregue volta para
+-- a fila de prontos e o gestor é avisado.
+-- ---------------------------------------------------------------------
+create or replace function public.release_active_runs(p_courier uuid)
+returns integer language plpgsql security definer set search_path = public as $$
+declare
+  r record;
+  n integer := 0;
+  v_back integer;
+  v_name text := public.log_person(p_courier);
+begin
+  for r in select id, company_id from public.delivery_runs
+            where courier_id = p_courier and status = 'in_progress' for update loop
+    -- Fecha a saída antes de soltar os pedidos: o despacho automático que
+    -- roda ao soltar não pode devolvê-los para esta mesma saída.
+    update public.delivery_runs
+       set status = case when exists (select 1 from public.delivery_orders o where o.run_id = r.id and o.status = 'delivered')
+                         then 'finished' else 'cancelled' end,
+           finished_at = now()
+     where id = r.id;
+    update public.delivery_orders
+       set run_id = null, courier_id = null, stop_sequence = null, courier_fee = null, dispatched_at = null,
+           status = case when status in ('on_route', 'problem') then 'ready' else status end
+     where run_id = r.id and status not in ('delivered', 'cancelled');
+    get diagnostics v_back = row_count;
+    if v_back > 0 then
+      n := n + v_back;
+      perform public.notify_company_managers(r.company_id, 'run_released',
+        'Entregas voltaram para a fila',
+        v_name || ' encerrou o expediente com ' || v_back || ' entrega(s) não finalizada(s). Elas voltaram para a fila de prontos.');
+      perform public.log_event(r.company_id, 'expediente', 'warning', 'run_released',
+        v_name || ' saiu com ' || v_back || ' entrega(s) não finalizada(s); voltaram para a fila',
+        'delivery_runs', r.id::text, null, jsonb_build_object('entregas', v_back));
+    end if;
+  end loop;
+  return n;
+end;
+$$;
+revoke execute on function public.release_active_runs(uuid) from public, anon, authenticated;
+
+create or replace function public.end_shift(p_shift uuid default null)
+returns void language plpgsql security definer as $$
+declare v record;
+begin
+  select * into v from public.courier_shifts s
+    where s.ended_at is null
+      and (case when p_shift is null then s.courier_id = auth.uid() else s.id = p_shift end);
+  if v.id is null then raise exception 'Nenhum expediente aberto.'; end if;
+  if v.courier_id is distinct from auth.uid() and not (v.company_id = public.my_company_id() and public.is_order_manager()) then
+    raise exception 'Sem permissão para encerrar este expediente.';
+  end if;
+  -- Fecha antes de devolver as saídas, senão o despacho daria a ele de novo.
+  update public.courier_shifts set ended_at = now(), closed_by = auth.uid(),
+         km = public.courier_km(v.courier_id, v.started_at, now())
+    where id = v.id;
+  perform public.release_planned_runs(v.courier_id);
+  perform public.release_active_runs(v.courier_id);
+end;
+$$;
+grant execute on function public.end_shift(uuid) to authenticated;
+
+create or replace function public.remove_collaborator(p_collaborator_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_caller_company uuid := public.my_company_id(); v_target record;
+begin
+  if auth.uid() is null or v_caller_company is null or public.my_company_role() is distinct from 'company_admin' then
+    raise exception 'Somente administradores da empresa podem remover colaboradores.';
+  end if;
+  if p_collaborator_id = auth.uid() then raise exception 'Você não pode remover a si mesmo.'; end if;
+  select company_id, company_role into v_target from public.profiles where id = p_collaborator_id;
+  if v_target.company_id is distinct from v_caller_company then
+    raise exception 'Esse colaborador não pertence à sua empresa.';
+  end if;
+  update public.profiles set company_id = null, company_role = null, supervised_by = null where id = p_collaborator_id;
+  -- Quem ele supervisionava fica sem supervisor; expediente aberto é encerrado
+  -- e as entregas dele (iniciadas ou não) voltam para a fila.
+  update public.profiles set supervised_by = null where supervised_by = p_collaborator_id;
+  update public.courier_shifts set ended_at = now(), closed_by = auth.uid()
+    where courier_id = p_collaborator_id and ended_at is null;
+  perform public.release_planned_runs(p_collaborator_id);
+  perform public.release_active_runs(p_collaborator_id);
+  perform public.log_audit(v_caller_company, 'collaborator_removed', jsonb_build_object('collaborator_id', p_collaborator_id));
+end;
+$$;
+revoke execute on function public.remove_collaborator(uuid) from public, anon;
+grant execute on function public.remove_collaborator(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
 -- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).
 -- O Supabase dá EXECUTE de toda função para anon. Aqui quem já podia
 -- (logado) continua podendo, e o visitante sem login só chama as funções

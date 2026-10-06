@@ -18,6 +18,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import NotificationBell from "./NotificationBell";
 import { SupportBanner, PlatformNotices } from "./PlatformBanners";
+import { markFirstPageShown } from "./PageLoading";
 import { pushSupported, subscribeToPush } from "../utils/pushNotifications";
 
 const ROLE_LABEL = {
@@ -30,6 +31,7 @@ const ROLE_LABEL = {
 const WIDE = 236;
 const NARROW = 72;
 const COLLAPSE_KEY = "menu-lateral-recolhido";
+const HIDDEN_KEY = "menu-lateral-escondido";
 
 // Menu do colaborador (motoboy): cada item é uma página.
 const COLLABORATOR_ITEMS = [
@@ -99,6 +101,8 @@ export default function AppShell({ title, actions, children, nav }) {
   const [pushMsg, setPushMsg] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [narrow, setNarrow] = useState(() => { try { return localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { return false; } });
+  // No computador o menu também pode sumir de vez (botão ☰ do topo).
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(HIDDEN_KEY) === "1"; } catch { return false; } });
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const unread = useUnreadMessages();
@@ -130,6 +134,13 @@ export default function AppShell({ title, actions, children, nav }) {
     if (item.path) { if (item.path !== pathname) navigate(item.path); return; }
     menu?.onSelect?.(item.key);
   };
+  // Página sem carregamento próprio: a abertura do app terminou aqui.
+  useEffect(() => { markFirstPageShown(); }, []);
+
+  const toggleHidden = () => setHidden((h) => {
+    try { localStorage.setItem(HIDDEN_KEY, h ? "0" : "1"); } catch { /* sem armazenamento */ }
+    return !h;
+  });
   const toggleNarrow = () => setNarrow((n) => {
     try { localStorage.setItem(COLLAPSE_KEY, n ? "0" : "1"); } catch { /* sem armazenamento */ }
     return !n;
@@ -146,7 +157,7 @@ export default function AppShell({ title, actions, children, nav }) {
     setTimeout(() => setPushMsg(""), 3000);
   };
 
-  const sideWidth = narrow ? NARROW : WIDE;
+  const sideWidth = hidden ? 0 : narrow ? NARROW : WIDE;
   const brandBlock = (isNarrow) => (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1.2, px: isNarrow ? 1 : 2.2, py: 2, minHeight: 64, justifyContent: isNarrow ? "center" : "flex-start" }}>
       {brand?.brand_logo_url ? (
@@ -169,10 +180,10 @@ export default function AppShell({ title, actions, children, nav }) {
     <Box sx={{ minHeight: "100vh", background: "#FAFAF9", display: "flex" }}>
       {menu && desktop && (
         <Box className="no-print" component="aside" sx={{
-          width: sideWidth, flexShrink: 0, position: "sticky", top: 0, height: "100vh",
-          borderRight: "1px solid #E7E5E4", background: "#fff", display: "flex", flexDirection: "column",
-          transition: "width .2s",
-        }}>
+          width: sideWidth, flexShrink: 0, position: "sticky", top: 0, height: "100vh", overflow: "hidden",
+          borderRight: hidden ? 0 : "1px solid #E7E5E4", background: "#fff", display: "flex", flexDirection: "column",
+          transition: "width .2s", visibility: hidden ? "hidden" : "visible",
+        }} aria-hidden={hidden || undefined}>
           {brandBlock(narrow)}
           <Box sx={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
             <NavList items={menu.items} current={menu.current} onSelect={select} narrow={narrow} unread={unread} />
@@ -209,7 +220,14 @@ export default function AppShell({ title, actions, children, nav }) {
                 <Badge color="error" variant="dot" invisible={!unread}><MenuIcon /></Badge>
               </IconButton>
             )}
-            {!(menu && desktop) && brand?.brand_logo_url && (
+            {menu && desktop && (
+              <Tooltip title={hidden ? "Mostrar menu" : "Esconder menu"}>
+                <IconButton edge="start" onClick={toggleHidden} aria-label={hidden ? "Mostrar menu" : "Esconder menu"} aria-expanded={!hidden}>
+                  <Badge color="error" variant="dot" invisible={!unread || !hidden}><MenuIcon /></Badge>
+                </IconButton>
+              </Tooltip>
+            )}
+            {!(menu && desktop && !hidden) && brand?.brand_logo_url && (
               <Box component="img" src={brand.brand_logo_url} alt={brand.name}
                 sx={{ height: { xs: 24, sm: 34 }, maxWidth: { xs: 72, sm: 140 }, objectFit: "contain", flexShrink: 0 }} />
             )}
