@@ -653,3 +653,26 @@ Teste no navegador: `node supabase/tests/e2e/fluxo-loja-rotas.mjs`.
   que o motoboy não lê, e a nota só é gravada pela página do cliente.
 - Logo da marca só PNG, JPEG ou WebP; importação do CRM só em https público e
   não "rouba" contas de outra empresa; códigos gerados com `crypto`.
+
+## 36. Log do sistema (plataforma)
+
+Aba **Log do sistema** no painel da plataforma (e aba **Log** dentro de cada
+empresa), no estilo do log do Mikrotik: hora, tópicos (`pedido,info`,
+`segurança,warning`...), empresa, quem fez e a mensagem. Clicando na linha
+aparece o detalhe: antes/depois de cada campo, IP, aparelho e e-mail.
+
+- O banco grava sozinho (gatilhos em `system_log`): pedidos (criado, cada
+  mudança de status, entrou/saiu de saída, editado), saídas (criada pelo
+  despacho automático ou pelo gestor, confirmada, passada para outro
+  motoboy, fora da rota), expediente (início, pausa, fim), ajustes da
+  empresa, cardápio, clientes, zonas, equipe (cargo, entrada/saída,
+  admin da plataforma), financeiro e o que já ia para a auditoria.
+- O app avisa: queda e volta da internet (com o tempo sem conexão),
+  servidor sem resposta, rede lenta, login errado (com o e-mail), entrada e
+  saída do sistema, troca de senha, GPS do motoboy sem sinal e erros de tela.
+  Sem internet o aviso espera no aparelho e vai quando a conexão volta.
+- Filtros por empresa, tópico, nível, período e busca (cliente, pedido,
+  pessoa, IP); modo ao vivo (a cada 5 s) e exportação em CSV.
+- Só a plataforma lê; ninguém grava ou apaga direto. Chaves e códigos de
+  convite aparecem só como "alterado". O app grava no máximo 30 avisos por
+  minuto por pessoa. Guarda 180 dias (limpeza diária pelo pg_cron, se houver).

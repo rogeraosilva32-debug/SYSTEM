@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import supabase from "../services/supabase";
+import { logEvent } from "../services/eventLog";
 import { Box, Button, TextField, Typography, CircularProgress, Container } from "@mui/material";
 
 export default function Login() {
@@ -34,7 +35,11 @@ export default function Login() {
     if (mode === "login") {
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       setLoading(false);
-      if (signInError) { setError(signInError.message); return; }
+      if (signInError) {
+        setError(signInError.message);
+        logEvent("segurança", "login_failed", "", "warning", { email: email.trim().toLowerCase(), erro: signInError.message });
+        return;
+      }
       navigate("/", { replace: true });
     } else {
       // O nome vai também no user_metadata: com confirmação de e-mail ligada

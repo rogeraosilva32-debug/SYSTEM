@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Box, Button, Container, TextField, Typography, CircularProgress } from "@mui/material";
 import LockResetIcon from "@mui/icons-material/LockReset";
 import supabase, { passwordRecovery } from "../services/supabase";
+import { logEvent } from "../services/eventLog";
 
 // Página que recebe o link de "esqueci minha senha" enviado por e-mail.
 // O Supabase, ao abrir esse link, detecta o token na URL e dispara o evento
@@ -65,6 +66,7 @@ export default function ResetPassword() {
     setSaving(false);
 
     if (updateError) { setError(updateError.message); return; }
+    logEvent("conta", "password_changed", "Criou ou trocou a senha pelo link do e-mail");
     setDone(true);
     setTimeout(() => navigate("/", { replace: true }), 1800);
   };
