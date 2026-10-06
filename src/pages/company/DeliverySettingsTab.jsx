@@ -107,6 +107,53 @@ function AutoDispatch({ company, onSave }) {
   );
 }
 
+// Link da tela da cozinha: abre a fila de preparo sem login (só a fila,
+// sem telefone, endereço ou valores). Trocar o link derruba o anterior.
+function KitchenLink() {
+  const [token, setToken] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const url = token ? `${window.location.origin}/cozinha/${token}` : "";
+  const get = async (reset) => {
+    if (reset && !window.confirm("Trocar o link? As telas abertas com o link antigo param de funcionar.")) return;
+    setBusy(true); setMsg(null);
+    try {
+      const { data, error } = await supabase.rpc("kitchen_display_token", { p_reset: Boolean(reset) });
+      if (error) { setMsg({ type: "error", text: /Could not find/.test(error.message) ? "Rode de novo o supabase-b2b-schema.sql para liberar o modo cozinha." : error.message }); return; }
+      setToken(data);
+      if (reset) setMsg({ type: "success", text: "Link trocado. Abra o novo link nas telas da cozinha." });
+    } catch {
+      setMsg({ type: "error", text: "Sem conexão. Tente de novo." });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(url); setMsg({ type: "success", text: "Link copiado." }); }
+    catch { setMsg({ type: "info", text: "Selecione o link e copie." }); }
+  };
+  return (
+    <Box>
+      <Typography sx={{ fontSize: 12.5, color: "#78716C", mb: 1.5 }}>
+        Tela cheia com os pedidos para preparar, com adicionais e observações. Abra na TV ou tablet da cozinha
+        pelo link abaixo (não precisa de login e não mostra telefone, endereço nem valores). Os gestores também
+        abrem pelo botão “Modo cozinha” na aba Pedidos.
+      </Typography>
+      {msg && <Alert severity={msg.type} sx={{ mb: 1.5 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
+      {token ? (
+        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
+          <TextField size="small" value={url} label="Link da cozinha" InputProps={{ readOnly: true }} onFocus={(e) => e.target.select()} sx={{ flex: 1, minWidth: 260 }} />
+          <Button variant="contained" onClick={copy}>Copiar</Button>
+          <Button onClick={() => window.open(url, "_blank", "noopener")}>Abrir</Button>
+          <Button color="error" disabled={busy} onClick={() => get(true)}>Trocar link</Button>
+        </Box>
+      ) : (
+        <Button variant="outlined" disabled={busy} onClick={() => get(false)}>Mostrar link da cozinha</Button>
+      )}
+    </Box>
+  );
+}
+
 function Section({ title, children }) {
   return (
     <Box sx={{ p: 2.5, border: "1px solid #E7E5E4", borderRadius: "16px", background: "#fff", mb: 2 }}>
@@ -226,6 +273,10 @@ export function DeliverySettingsTab() {
 
       <Section title="Despacho automático">
         <AutoDispatch key={`${company.id}-${company.auto_max_stops}-${company.auto_max_detour_km}`} company={company} onSave={updateCompany} />
+      </Section>
+
+      <Section title="Tela da cozinha">
+        <KitchenLink />
       </Section>
 
       <Section title="Taxa do motoboy">

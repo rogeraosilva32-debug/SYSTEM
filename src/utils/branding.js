@@ -4,7 +4,7 @@ export const BRAND_SLOTS = [
     key: "brand_logo_url", file: "logo", title: "Logo horizontal",
     where: "Topo do painel e do app do motoboy",
     size: "600 × 200 px (proporção 3:1), fundo transparente",
-    width: 600, height: 200, types: ["image/png", "image/svg+xml"], typesLabel: "PNG ou SVG", maxKb: 500,
+    width: 600, height: 200, types: ["image/png", "image/webp"], typesLabel: "PNG ou WebP", maxKb: 500,
   },
   {
     key: "brand_icon_url", file: "icone", title: "Ícone (quadrado)",
@@ -26,6 +26,14 @@ export const BRAND_SLOTS = [
   },
 ];
 
+// Só PNG/JPEG/WebP (SVG pode carregar script). Confere MIME E extensão.
+export const BRAND_EXTENSIONS = { "image/png": ["png"], "image/jpeg": ["jpg", "jpeg"], "image/webp": ["webp"] };
+
+// Valor do atributo accept do input: MIME + extensões permitidas no slot.
+export function brandAccept(slot) {
+  return slot.types.flatMap((t) => [t, ...(BRAND_EXTENSIONS[t] || []).map((e) => `.${e}`)]).join(",");
+}
+
 function readDimensions(file) {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
@@ -40,7 +48,10 @@ function readDimensions(file) {
 // diferente só avisa (a imagem é ajustada na tela, mas pode distorcer ou
 // ficar borrada).
 export async function checkBrandImage(slot, file) {
-  if (!slot.types.includes(file.type)) return { error: `Formato inválido. Use ${slot.typesLabel}.` };
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  if (!slot.types.includes(file.type) || !(BRAND_EXTENSIONS[file.type] || []).includes(ext)) {
+    return { error: `Formato inválido. Use ${slot.typesLabel}.` };
+  }
   if (file.size > slot.maxKb * 1024) return { error: `Arquivo grande demais (${Math.round(file.size / 1024)} KB). Máximo: ${slot.maxKb >= 1024 ? `${slot.maxKb / 1024} MB` : `${slot.maxKb} KB`}.` };
   const dim = await readDimensions(file);
   if (!dim) return { error: "Não foi possível ler a imagem." };
@@ -48,6 +59,6 @@ export async function checkBrandImage(slot, file) {
   const expected = slot.width / slot.height;
   const warnings = [];
   if (Math.abs(ratio - expected) / expected > 0.1) warnings.push(`a proporção é ${dim.width}×${dim.height}; o recomendado é ${slot.width}×${slot.height}`);
-  if (file.type !== "image/svg+xml" && dim.width < slot.width * 0.75) warnings.push(`a imagem é pequena (${dim.width} px de largura) e pode ficar borrada`);
+  if (dim.width < slot.width * 0.75) warnings.push(`a imagem é pequena (${dim.width} px de largura) e pode ficar borrada`);
   return { dim, warning: warnings.length ? `Atenção: ${warnings.join("; ")}.` : "" };
 }

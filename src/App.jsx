@@ -22,6 +22,7 @@ const CourierEarnings = lazy(() => import("./pages/CourierEarnings"));
 const CollaboratorChat = lazy(() => import("./pages/CollaboratorChat"));
 const SupervisorDashboard = lazy(() => import("./pages/SupervisorDashboard"));
 const RatingPage = lazy(() => import("./pages/RatingPage"));
+const KitchenDisplay = lazy(() => import("./pages/KitchenDisplay"));
 
 function RootRoute() {
   const auth = useAuth();
@@ -45,6 +46,8 @@ function AnimatedApp() {
             <Route path="/login" element={<Login />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/avaliar/:token" element={<RatingPage />} />
+            <Route path="/cozinha" element={<RoleRoute allow={["company_admin", "supervisor"]}><KitchenDisplay /></RoleRoute>} />
+            <Route path="/cozinha/:token" element={<KitchenDisplay />} />
 
             <Route path="/ativar" element={<ProtectedRoute><Activate /></ProtectedRoute>} />
 

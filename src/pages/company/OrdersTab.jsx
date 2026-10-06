@@ -2,9 +2,14 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Box, Typography, Button, TextField, MenuItem, CircularProgress, Chip, Checkbox,
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton, FormControlLabel, Alert, Autocomplete,
-  ToggleButton, ToggleButtonGroup,
+  ToggleButton, ToggleButtonGroup, Stepper, Step, StepButton, useMediaQuery,
 } from "@mui/material";
+import PersonOutlineIcon from "@mui/icons-material/PersonOutlined";
+import PlaceOutlinedIcon from "@mui/icons-material/PlaceOutlined";
+import FastfoodOutlinedIcon from "@mui/icons-material/FastfoodOutlined";
+import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import StorefrontIcon from "@mui/icons-material/StorefrontOutlined";
+import SoupKitchenIcon from "@mui/icons-material/SoupKitchenOutlined";
 import RemoveIcon from "@mui/icons-material/Remove";
 import AddIcon from "@mui/icons-material/Add";
 import CloseIcon from "@mui/icons-material/Close";
@@ -191,9 +196,26 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [found, setFound] = useState("");
+  const [step, setStep] = useState("client");
+  const [checking, setChecking] = useState(false);
+  const narrow = useMediaQuery("(max-width:600px)");
+
+  // Ao abrir de novo, volta para a primeira etapa (o que já foi digitado fica).
+  useEffect(() => { if (open) { setStep("client"); setError(""); } }, [open]); // eslint-disable-line react-hooks/set-state-in-effect
 
   const local = orderType === "local";
+  // Uma etapa por vez: cliente → endereço (só entrega) → produtos → pagamento.
+  const steps = [
+    { key: "client", label: "Cliente", icon: <PersonOutlineIcon fontSize="small" /> },
+    ...(local ? [] : [{ key: "address", label: "Endereço", icon: <PlaceOutlinedIcon fontSize="small" /> }]),
+    { key: "items", label: "Produtos", icon: <FastfoodOutlinedIcon fontSize="small" /> },
+    { key: "payment", label: "Pagamento", icon: <PaymentsOutlinedIcon fontSize="small" /> },
+  ];
+  const stepIndex = Math.max(0, steps.findIndex((x) => x.key === step));
+  const current = steps[stepIndex];
+  const isLast = stepIndex === steps.length - 1;
   const reset = () => {
+    setStep("client");
     setOrderType("delivery"); setPhone(""); setName(""); setCustomerId(null); setAddress(EMPTY_ADDRESS); setComplement("");
     setSource("telefone"); setCart([]); setFee(""); setPayment("dinheiro");
     setChangeFor(""); setNotes(""); setSaveCustomer(true); setError(""); setFound("");
@@ -216,6 +238,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
     if (!t || t === orderType) return;
     setOrderType(t);
     setError("");
+    if (t === "local" && step === "address") setStep("client");
     setSource((s) => (t === "local" && s === "telefone" ? "balcao" : t === "delivery" && s === "balcao" ? "telefone" : s));
   };
 
@@ -237,11 +260,51 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
     }
   };
 
+  // Antes de sair da etapa do endereço: precisa de ponto no mapa (rota do motoboy).
+  const ensureLocated = async () => {
+    let addr = address;
+    if ((!addr.lat || !addr.lng) && (addr.street || addr.neighborhood)) {
+      const r = await locateAddress({ ...addr, city: addr.city || store?.city, state: addr.state || store?.state }, store).catch(() => null);
+      if (r) {
+        addr = { ...addr, neighborhood: addr.neighborhood || r.neighborhood, city: addr.city || r.city, lat: r.lat, lng: r.lng, precision: r.precision };
+        setAddress(addr);
+      }
+    }
+    return Boolean(addr.lat && addr.lng);
+  };
+
+  const stepError = (key) => {
+    if (key === "client" && !local && !name.trim()) return "Informe o nome do cliente.";
+    if (key === "address" && !address.street && !address.neighborhood && !address.lat) return "Digite o endereço, busque ou marque o ponto no mapa.";
+    if (key === "items" && cart.length === 0) return "Adicione ao menos um produto do cardápio.";
+    return "";
+  };
+
+  const next = async () => {
+    if (checking) return;
+    const msg = stepError(current.key);
+    if (msg) { setError(msg); return; }
+    if (current.key === "address") {
+      setChecking(true);
+      const ok = await ensureLocated();
+      setChecking(false);
+      if (!ok) { setError("Não achei esse endereço no mapa. Confira o endereço, use a busca ou clique no mapa no ponto da entrega."); return; }
+    }
+    setError("");
+    setStep(steps[stepIndex + 1].key);
+  };
+
+  // Volta para qualquer etapa anterior; para frente só passando pela validação.
+  const goTo = (i) => {
+    if (i < stepIndex) { setError(""); setStep(steps[i].key); }
+    else if (i === stepIndex + 1) next();
+  };
+
   const handleSave = async () => {
     if (saving) return;
     setError("");
-    if (!local && !name.trim()) { setError("Informe o nome do cliente."); return; }
-    if (cart.length === 0) { setError("Adicione ao menos um produto do cardápio."); return; }
+    if (!local && !name.trim()) { setStep("client"); setError("Informe o nome do cliente."); return; }
+    if (cart.length === 0) { setStep("items"); setError("Adicione ao menos um produto do cardápio."); return; }
     if (feeInvalid) { setError("Taxa de entrega inválida. Use só números, ex.: 5,00."); return; }
     if (changeInvalid) { setError("Valor do troco inválido. Use só números, ex.: 50,00."); return; }
     setSaving(true);
@@ -259,6 +322,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
           }
         }
         if (!addr.lat || !addr.lng) {
+          setStep("address");
           setError("Não achei esse endereço no mapa. Confira o endereço, use a busca ou clique no mapa no ponto da entrega.");
           return;
         }
@@ -309,79 +373,133 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
     }
   };
 
+  const itemCount = cart.reduce((n, it) => n + it.quantity, 0);
+  const label = (t) => <Typography sx={{ fontSize: 13, fontWeight: 700, color: "#44403C", mb: 0.8 }}>{t}</Typography>;
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontWeight: 800 }}>Novo pedido</DialogTitle>
-      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 1.5, pt: "8px !important" }}>
-        <ToggleButtonGroup exclusive fullWidth size="small" color="primary" value={orderType}
-          onChange={(_, t) => changeType(t)} aria-label="Tipo do pedido">
-          <ToggleButton value="delivery" sx={{ gap: 0.8, fontWeight: 700, textTransform: "none" }}><TwoWheelerIcon fontSize="small" /> Entrega</ToggleButton>
-          <ToggleButton value="local" sx={{ gap: 0.8, fontWeight: 700, textTransform: "none" }}><StorefrontIcon fontSize="small" /> Pedido local</ToggleButton>
-        </ToggleButtonGroup>
-        {local && (
-          <Typography sx={{ fontSize: 12, color: "#78716C", mt: -0.5 }}>
-            Retirada ou consumo na loja: sem endereço, sem taxa de entrega e sem motoboy.
-          </Typography>
-        )}
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.2 }}>
-          <TextField label={local ? "Telefone (opcional)" : "Telefone do cliente"} size="small" value={phone}
-            onChange={(e) => setPhone(e.target.value)} onBlur={lookupCustomer} />
-          <TextField label={local ? "Nome do cliente (opcional)" : "Nome do cliente"} size="small" value={name} onChange={(e) => setName(e.target.value)} />
-        </Box>
-        {found && !local && <Typography sx={{ fontSize: 11.5, color: "#4B7A5E", fontWeight: 600 }}>{found}</Typography>}
-        {!local && !store && (
-          <Alert severity="info" sx={{ py: 0 }}>Cadastre o endereço da loja em "Entregas: ajustes" para as buscas priorizarem a sua cidade e as rotas saírem da loja.</Alert>
-        )}
-        {!local && (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={narrow}>
+      <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>
+        {local ? "Novo pedido local" : "Novo pedido de entrega"}
+        <Typography sx={{ fontSize: 12.5, color: "#78716C", fontWeight: 600 }}>
+          Etapa {stepIndex + 1} de {steps.length}: {current.label}
+        </Typography>
+      </DialogTitle>
+      <Box sx={{ px: 3, pb: 1 }}>
+        <Stepper nonLinear activeStep={stepIndex} alternativeLabel>
+          {steps.map((x, i) => (
+            <Step key={x.key} completed={i < stepIndex}>
+              <StepButton onClick={() => goTo(i)} aria-label={`Etapa ${x.label}`}>
+                <Typography sx={{ fontSize: 12, fontWeight: i === stepIndex ? 800 : 600 }}>{x.label}</Typography>
+              </StepButton>
+            </Step>
+          ))}
+        </Stepper>
+      </Box>
+      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "12px !important", minHeight: { sm: 360 } }}>
+        {current.key === "client" && (
           <>
-            <DeliveryAddressField value={address} onChange={setAddress} store={store} />
-            <TextField label="Complemento / referência" size="small" value={complement} onChange={(e) => setComplement(e.target.value)} />
+            <Box>
+              {label("Como o cliente vai receber?")}
+              <ToggleButtonGroup exclusive fullWidth color="primary" value={orderType}
+                onChange={(_, t) => changeType(t)} aria-label="Tipo do pedido">
+                <ToggleButton value="delivery" sx={{ gap: 1, py: 1.5, fontWeight: 700, textTransform: "none", fontSize: 15 }}><TwoWheelerIcon /> Entrega</ToggleButton>
+                <ToggleButton value="local" sx={{ gap: 1, py: 1.5, fontWeight: 700, textTransform: "none", fontSize: 15 }}><StorefrontIcon /> Pedido local</ToggleButton>
+              </ToggleButtonGroup>
+              <Typography sx={{ fontSize: 12.5, color: "#78716C", mt: 0.8 }}>
+                {local ? "Retirada ou consumo na loja: sem endereço, sem taxa de entrega e sem motoboy." : "Vai com motoboy: na próxima etapa você informa o endereço."}
+              </Typography>
+            </Box>
+            <Box>
+              {label("Quem é o cliente?")}
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+                <TextField label={local ? "Telefone (opcional)" : "Telefone do cliente"} value={phone} inputMode="tel" autoFocus
+                  onChange={(e) => setPhone(e.target.value)} onBlur={lookupCustomer}
+                  helperText={found && !local ? "" : "Com o telefone, o cliente já cadastrado é preenchido sozinho."} />
+                {found && !local && <Alert severity="success" sx={{ py: 0 }}>{found}</Alert>}
+                <TextField label={local ? "Nome do cliente (opcional)" : "Nome do cliente"} value={name} onChange={(e) => setName(e.target.value)} />
+              </Box>
+            </Box>
           </>
         )}
-        <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: "#78716C", mt: 0.5 }}>PRODUTOS</Typography>
-        {menu.items.length === 0 && (
-          <Alert severity="info" sx={{ py: 0 }}>Nenhum produto no cardápio. O admin da empresa cadastra na aba “Cardápio”.</Alert>
+
+        {current.key === "address" && (
+          <>
+            {!store && (
+              <Alert severity="info" sx={{ py: 0 }}>Cadastre o endereço da loja em "Entregas: ajustes" para as buscas priorizarem a sua cidade e as rotas saírem da loja.</Alert>
+            )}
+            <DeliveryAddressField value={address} onChange={setAddress} store={store} />
+            <TextField label="Complemento / referência" value={complement} onChange={(e) => setComplement(e.target.value)}
+              placeholder="Ex.: apto 12, casa dos fundos, perto da padaria" />
+          </>
         )}
-        <ProductPicker menu={menu} onAdd={(it) => setCart([...cart, it])} />
-        <Cart cart={cart} setCart={setCart} />
-        <Box sx={{ display: "grid", gridTemplateColumns: local ? "1fr" : "1fr 1fr", gap: 1.2 }}>
-          {!local && (
-            <TextField label="Taxa de entrega" size="small" value={fee} onChange={(e) => setFee(e.target.value)} inputMode="decimal"
-              placeholder={zoneFee != null ? String(zoneFee) : ""} error={feeInvalid}
-              helperText={feeInvalid ? "Valor inválido" : zoneFee != null && fee === "" ? `Bairro: ${money(zoneFee)}` : " "} />
-          )}
-          <TextField select label="Origem" size="small" value={source} onChange={(e) => setSource(e.target.value)}>
-            {Object.entries(SOURCE_LABEL).filter(([k]) => k !== "ifood").map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
-          </TextField>
-        </Box>
-        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.2 }}>
-          <TextField select label="Pagamento" size="small" value={payment} onChange={(e) => setPayment(e.target.value)}>
-            {Object.entries(PAYMENT_LABEL).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
-          </TextField>
-          {payment === "dinheiro" && (
-            <TextField label="Troco para" size="small" value={changeFor} onChange={(e) => setChangeFor(e.target.value)} inputMode="decimal"
-              error={changeInvalid} helperText={changeInvalid ? "Valor inválido" : ""} />
-          )}
-        </Box>
-        <TextField label="Observações" size="small" value={notes} onChange={(e) => setNotes(e.target.value)} />
-        <Box sx={{ p: 1.5, background: "#FAFAF9", borderRadius: "12px", display: "flex", flexDirection: "column", gap: 0.4 }}>
-          <SummaryLine label="Produtos" value={money(subtotal)} />
-          {!local && <SummaryLine label="Taxa de entrega" value={money(feeValue)} />}
-          {!local && hasCourierFee && <SummaryLine label="Taxa do motoboy" value="somada ao escolher o motoboy" muted />}
-          <SummaryLine label={local ? "Total" : "Total agora"} value={money(subtotal + feeValue)} strong />
-        </Box>
-        <FormControlLabel
-          control={<Checkbox size="small" checked={saveCustomer} onChange={(e) => setSaveCustomer(e.target.checked)} />}
-          label={<Typography sx={{ fontSize: 13 }}>Salvar cliente para o próximo pedido</Typography>}
-          sx={{ display: local && !phone.trim() ? "none" : undefined }}
-        />
+
+        {current.key === "items" && (
+          <>
+            {menu.items.length === 0 && (
+              <Alert severity="info" sx={{ py: 0 }}>Nenhum produto no cardápio. O admin da empresa cadastra na aba “Cardápio”.</Alert>
+            )}
+            <ProductPicker menu={menu} onAdd={(it) => { setCart([...cart, it]); setError(""); }} />
+            <Box>
+              {label(`No pedido${itemCount ? ` (${itemCount})` : ""}`)}
+              <Cart cart={cart} setCart={setCart} />
+            </Box>
+          </>
+        )}
+
+        {current.key === "payment" && (
+          <>
+            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5 }}>
+              <TextField select label="Pagamento" value={payment} onChange={(e) => setPayment(e.target.value)}>
+                {Object.entries(PAYMENT_LABEL).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
+              </TextField>
+              {payment === "dinheiro" ? (
+                <TextField label="Troco para" value={changeFor} onChange={(e) => setChangeFor(e.target.value)} inputMode="decimal"
+                  error={changeInvalid} helperText={changeInvalid ? "Valor inválido" : "Deixe vazio se não precisa de troco."} />
+              ) : <Box sx={{ display: { xs: "none", sm: "block" } }} />}
+              {!local && (
+                <TextField label="Taxa de entrega" value={fee} onChange={(e) => setFee(e.target.value)} inputMode="decimal"
+                  placeholder={zoneFee != null ? String(zoneFee) : ""} error={feeInvalid}
+                  helperText={feeInvalid ? "Valor inválido" : zoneFee != null && fee === "" ? `Bairro: ${money(zoneFee)}` : "Vazio = taxa do bairro."} />
+              )}
+              <TextField select label="Origem do pedido" value={source} onChange={(e) => setSource(e.target.value)}>
+                {Object.entries(SOURCE_LABEL).filter(([k]) => k !== "ifood").map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
+              </TextField>
+            </Box>
+            <TextField label="Observações do pedido" value={notes} onChange={(e) => setNotes(e.target.value)} multiline minRows={2} />
+            <Box sx={{ p: 1.5, background: "#FAFAF9", borderRadius: "12px", display: "flex", flexDirection: "column", gap: 0.5 }}>
+              <SummaryLine label="Cliente" value={name.trim() || (local ? "Cliente no balcão" : "—")} />
+              {!local && <SummaryLine label="Entrega em" value={orderAddress({ address_street: address.street, address_number: address.number, address_neighborhood: address.neighborhood }) || "—"} />}
+              <SummaryLine label={`Produtos (${itemCount})`} value={money(subtotal)} />
+              {!local && <SummaryLine label="Taxa de entrega" value={money(feeValue)} />}
+              {!local && hasCourierFee && <SummaryLine label="Taxa do motoboy" value="somada ao escolher o motoboy" muted />}
+              <SummaryLine label={local ? "Total" : "Total agora"} value={money(subtotal + feeValue)} strong />
+            </Box>
+            <FormControlLabel
+              control={<Checkbox size="small" checked={saveCustomer} onChange={(e) => setSaveCustomer(e.target.checked)} />}
+              label={<Typography sx={{ fontSize: 13 }}>Salvar cliente para o próximo pedido</Typography>}
+              sx={{ display: local && !phone.trim() ? "none" : undefined }}
+            />
+          </>
+        )}
         {error && <Alert severity="error">{error}</Alert>}
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
+      <DialogActions sx={{ px: 3, pb: 2, gap: 1, flexWrap: "wrap" }}>
+        {itemCount > 0 && current.key !== "payment" && (
+          <Typography sx={{ mr: "auto", fontSize: 13, fontWeight: 700, color: "#57534E" }}>
+            {itemCount} {itemCount === 1 ? "item" : "itens"} · {money(subtotal)}
+          </Typography>
+        )}
         <Button onClick={onClose}>Cancelar</Button>
-        <Button variant="contained" onClick={handleSave} disabled={saving}>
-          {saving ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : local ? "Criar pedido local" : "Criar pedido"}
-        </Button>
+        {stepIndex > 0 && <Button variant="outlined" onClick={() => goTo(stepIndex - 1)}>Voltar</Button>}
+        {isLast ? (
+          <Button variant="contained" onClick={handleSave} disabled={saving}>
+            {saving ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : local ? "Criar pedido local" : "Criar pedido"}
+          </Button>
+        ) : (
+          <Button variant="contained" onClick={next} disabled={checking}>
+            {checking ? <CircularProgress size={18} sx={{ color: "#fff" }} /> : "Continuar"}
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );
@@ -828,6 +946,9 @@ export function OrdersTab() {
         <Button variant="outlined" startIcon={<TwoWheelerIcon />} disabled={selected.size === 0}
           onClick={() => setRunDialog({ open: true, run: null })}>
           Despachar {selected.size > 0 ? `(${selected.size})` : ""}
+        </Button>
+        <Button variant="text" startIcon={<SoupKitchenIcon />} onClick={() => window.open("/cozinha", "_blank", "noopener")}>
+          Modo cozinha
         </Button>
         <Typography sx={{ ml: "auto", fontSize: 12.5, color: "#78716C", fontWeight: 600 }}>
           Entregues hoje: {deliveredToday}

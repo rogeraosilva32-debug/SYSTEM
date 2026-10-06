@@ -29,7 +29,7 @@ const PRECISION = {
 function Recenter({ point }) {
   const map = useMap();
   useEffect(() => {
-    if (point) map.setView(point, Math.max(map.getZoom(), 16));
+    if (point) map.setView(point, Math.max(map.getZoom(), 16), { animate: false });
     const t = setTimeout(() => map.invalidateSize(), 250);
     return () => clearTimeout(t);
   }, [map, point]);

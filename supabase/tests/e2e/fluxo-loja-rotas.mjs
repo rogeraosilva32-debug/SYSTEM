@@ -9,6 +9,7 @@ const APP = 'http://localhost:4173';
 const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q.replace(/"/g, '\\"')}"`).toString().trim();
 const log = (...a) => console.log('•', ...a);
 const errors = [];
+const cont = (p) => p.getByRole('button', { name: 'Continuar' }).click();
 const nominatimCalls = [];
 const photonCalls = [];
 
@@ -96,28 +97,33 @@ await admin.screenshot({ path: `${SHOTS}/30-endereco-loja.png`, fullPage: true }
 await admin.reload(); await admin.waitForLoadState('networkidle');
 await admin.getByText('Pedidos', { exact: true }).first().click();
 await admin.getByRole('button', { name: 'Novo pedido' }).click();
-log('botão de GPS do aparelho no pedido:', await admin.getByText(/localização deste aparelho/).count());
 await admin.getByLabel('Nome do cliente').fill('Rua Errada');
+await cont(admin);
+log('botão de GPS do aparelho no pedido:', await admin.getByText(/localização deste aparelho/).count());
 await admin.getByLabel('Rua').fill('Rua Inexistente');
 await admin.getByLabel('Número').fill('1');
 await admin.getByText(/Não achei esse endereço no mapa/).waitFor({ timeout: 8000 });
-await admin.getByLabel('Adicionar produto do cardápio').fill('Misto');
-await admin.getByRole('option', { name: /Misto quente/ }).click();
-await admin.getByRole('button', { name: /^Adicionar R\$/ }).click();
-await admin.getByRole('button', { name: 'Criar pedido' }).click();
+await cont(admin);
 await admin.getByText(/Não achei esse endereço no mapa. Confira o endereço, use/).waitFor();
-log('pedido sem ponto no mapa: recusado, pede para marcar no mapa');
+log('pedido sem ponto no mapa: não passa da etapa do endereço, pede para marcar no mapa');
 // marca o ponto clicando no mapa
 const map = admin.locator('.MuiDialog-root .leaflet-container');
 const box = await map.boundingBox();
 await admin.mouse.click(box.x + box.width / 2 + 30, box.y + box.height / 2);
 await admin.getByText('✓ Ponto marcado no mapa.').waitFor();
+await cont(admin);
+await admin.getByLabel('Adicionar produto do cardápio').fill('Misto');
+await admin.getByRole('option', { name: /Misto quente/ }).click();
+await admin.getByRole('button', { name: /^Adicionar R\$/ }).click();
+await cont(admin);
 await admin.getByRole('button', { name: 'Criar pedido' }).click();
 await admin.getByText('Rua Errada').first().waitFor();
 log('pedido com ponto marcado à mão:', sql(`select (lat is not null)::text||' cidade='||coalesce(address_city,'-') from delivery_orders where customer_name='Rua Errada'`));
 
 // rua que o mapa conhece mas sem números: avisa com honestidade
 await admin.getByRole('button', { name: 'Novo pedido' }).click();
+await admin.getByLabel('Nome do cliente').fill('Teste Rua');
+await cont(admin);
 await admin.getByLabel('Rua').fill('adelina garcia chagas');
 await admin.getByLabel('Número').fill('45');
 await admin.getByText(/Localizada a rua. O mapa gratuito não tem os números/).waitFor({ timeout: 8000 });
@@ -134,15 +140,18 @@ await admin.waitForTimeout(400);
 
 await admin.getByRole('button', { name: 'Novo pedido' }).click();
 await admin.getByLabel('Nome do cliente').fill('Paula Prado');
+await cont(admin);
 await admin.getByLabel('Rua').fill('Avenida Paulista');
 await admin.getByLabel('Número').fill('1000');
 await admin.getByText('✓ Endereço localizado no mapa.').waitFor({ timeout: 8000 });
+await cont(admin);
 const call = photonCalls.at(-1);
 log('busca do pedido usou a cidade e a posição da loja:', `q=${call.q} perto=${call.lat ? 'sim' : 'não'}`);
 await admin.getByLabel('Adicionar produto do cardápio').fill('Misto');
 await admin.getByRole('option', { name: /Misto quente/ }).click();
 await admin.getByRole('button', { name: /^Adicionar R\$/ }).click();
 await admin.screenshot({ path: `${SHOTS}/31-pedido-endereco.png` });
+await cont(admin);
 await admin.getByRole('button', { name: 'Criar pedido' }).click();
 await admin.getByText('Paula Prado').first().waitFor();
 log('pedido digitado no banco:', sql(`select address_neighborhood||' · '||address_city||' ('||round(lat::numeric,4)||','||round(lng::numeric,4)||')' from delivery_orders where customer_name='Paula Prado'`));

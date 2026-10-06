@@ -237,17 +237,23 @@ function AssignmentPhotos({ assignmentId, companyId }) {
   const handleUpload = async (kind, file) => {
     if (!file) return;
     setUploading(kind);
-    // eslint-disable-next-line react-hooks/purity -- roda dentro de um manipulador de evento (input de arquivo), nunca durante o render.
-    const path = `${assignmentId}/${kind}-${Date.now()}.${file.name.split(".").pop()}`;
-    const { error: uploadError } = await supabase.storage.from("assignment-photos").upload(path, file);
-    if (uploadError) { alert("Erro ao enviar foto: " + uploadError.message); setUploading(null); return; }
+    try {
+      // eslint-disable-next-line react-hooks/purity -- roda dentro de um manipulador de evento (input de arquivo), nunca durante o render.
+      const path = `${assignmentId}/${kind}-${Date.now()}.${file.name.split(".").pop()}`;
+      const { error: uploadError } = await supabase.storage.from("assignment-photos").upload(path, file);
+      if (uploadError) { alert("Erro ao enviar foto: " + uploadError.message); return; }
 
-    const { data: signed } = await supabase.storage.from("assignment-photos").createSignedUrl(path, 60 * 60 * 24 * 365);
-    await supabase.from("assignment_photos").insert({
-      assignment_id: assignmentId, company_id: companyId, kind, url: signed?.signedUrl || path,
-    });
-    setUploading(null);
-    load();
+      const { data: signed } = await supabase.storage.from("assignment-photos").createSignedUrl(path, 60 * 60 * 24 * 365);
+      const { error: insertError } = await supabase.from("assignment_photos").insert({
+        assignment_id: assignmentId, company_id: companyId, kind, url: signed?.signedUrl || path,
+      });
+      if (insertError) { alert("Erro ao salvar foto: " + insertError.message); return; }
+      load();
+    } catch (err) {
+      alert("Erro ao enviar foto: " + (err?.message || err));
+    } finally {
+      setUploading(null);
+    }
   };
 
   if (photos === null) return null;
@@ -293,6 +299,54 @@ function AssignmentPhotos({ assignmentId, companyId }) {
         </Box>
       )}
     </Box>
+  );
+}
+
+// Link de avaliação: o token fica em assignment_rating_tokens (só admin/
+// supervisor leem). Se não achar (ou a tabela ainda não existir), usa o
+// rating_token antigo da designação; sem nenhum, esconde o link.
+function RatingLink({ assignment }) {
+  const [token, setToken] = useState(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase.from("assignment_rating_tokens").select("token").eq("assignment_id", assignment.id).maybeSingle()
+      .then(({ data, error }) => {
+        if (!cancelled) setToken((!error && data?.token) || assignment.rating_token || null);
+      }, () => { if (!cancelled) setToken(assignment.rating_token || null); });
+    return () => { cancelled = true; };
+  }, [assignment.id, assignment.rating_token]);
+
+  if (token === undefined) return <CircularProgress size={16} />;
+  if (!token) return null;
+
+  const link = `${window.location.origin}/avaliar/${token}`;
+  return (
+    <>
+      <Typography sx={{ fontSize: 11.5, color: "#78716C", mb: 1 }}>
+        Envie este link pro cliente avaliar o atendimento (1 a 5 estrelas, sem precisar criar conta).
+      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: assignment.customer_phone ? 1 : 0 }}>
+        <Typography sx={{ fontSize: 11.5, color: "#57534E", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {link}
+        </Typography>
+        <IconButton size="small" onClick={() => copyToClipboard(link)}>
+          <ContentCopyIcon sx={{ fontSize: 14 }} />
+        </IconButton>
+      </Box>
+      {assignment.customer_phone && (
+        <Button
+          size="small" variant="outlined" fullWidth
+          onClick={() => window.open(
+            whatsappShareUrl(assignment.customer_phone, `Olá! Poderia avaliar o atendimento de hoje? ${link}`),
+            "_blank", "noopener,noreferrer"
+          )}
+          sx={{ textTransform: "none", fontWeight: 700 }}
+        >
+          Enviar por WhatsApp
+        </Button>
+      )}
+    </>
   );
 }
 
@@ -463,29 +517,7 @@ export function AssignmentsTab() {
                   ) : (
                     <>
                       <Typography sx={{ fontSize: 10.5, fontWeight: 700, color: "#8A8580", letterSpacing: "0.06em", textTransform: "uppercase", mb: 0.6 }}>Avaliação do cliente</Typography>
-                      <Typography sx={{ fontSize: 11.5, color: "#78716C", mb: 1 }}>
-                        Envie este link pro cliente avaliar o atendimento (1 a 5 estrelas, sem precisar criar conta).
-                      </Typography>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: detail.customer_phone ? 1 : 0 }}>
-                        <Typography sx={{ fontSize: 11.5, color: "#57534E", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {window.location.origin}/avaliar/{detail.rating_token}
-                        </Typography>
-                        <IconButton size="small" onClick={() => copyToClipboard(`${window.location.origin}/avaliar/${detail.rating_token}`)}>
-                          <ContentCopyIcon sx={{ fontSize: 14 }} />
-                        </IconButton>
-                      </Box>
-                      {detail.customer_phone && (
-                        <Button
-                          size="small" variant="outlined" fullWidth
-                          onClick={() => window.open(
-                            whatsappShareUrl(detail.customer_phone, `Olá! Poderia avaliar o atendimento de hoje? ${window.location.origin}/avaliar/${detail.rating_token}`),
-                            "_blank", "noopener,noreferrer"
-                          )}
-                          sx={{ textTransform: "none", fontWeight: 700 }}
-                        >
-                          Enviar por WhatsApp
-                        </Button>
-                      )}
+                      <RatingLink assignment={detail} />
                     </>
                   )}
                 </Box>

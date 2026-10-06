@@ -1,6 +1,7 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ProfileLoadFallback from "./ProfileLoadFallback";
+import CompanySuspendedGate from "./CompanySuspendedGate";
 
 const HOME_BY_ROLE = { platform: "/plataforma", company_admin: "/painel", collaborator: "/entregas", supervisor: "/supervisao" };
 
@@ -33,7 +34,7 @@ export default function RoleRoute({ allow, children }) {
   const permitted = allow.some((role) => roleChecks[role]);
   if (!permitted) return <Navigate to={homeForCurrentUser(auth)} replace />;
 
-  return children;
+  return <CompanySuspendedGate>{children}</CompanySuspendedGate>;
 }
 
 // Exportar uma função junto do componente só afeta o hot reload em dev.

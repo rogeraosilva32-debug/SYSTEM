@@ -6,6 +6,7 @@ const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q
 const APP = 'http://localhost:4173';
 const log = (...a) => console.log('•', ...a);
 const errors = [];
+const cont = (p) => p.getByRole('button', { name: 'Continuar' }).click();
 
 async function mockExternal(ctx) {
   await ctx.addInitScript(() => { window.open = (u) => { window.__opened = u; return null; }; });
@@ -49,15 +50,19 @@ await admin.screenshot({ path: `${SHOTS}/01-fila.png` });
 await admin.getByRole('button', { name: 'Novo pedido' }).click();
 await admin.getByLabel('Telefone do cliente').fill('11977778888');
 await admin.getByLabel('Nome do cliente').fill('Diego Alves');
+await cont(admin);
 await admin.getByLabel('Rua').fill('Avenida Paulista');
 await admin.getByLabel('Número').fill('1000');
 await admin.getByLabel('Bairro').fill('Bela Vista');
 await admin.getByLabel('Cidade').fill('São Paulo');
+await cont(admin);
 await admin.getByLabel('Adicionar produto do cardápio').fill('Misto');
 await admin.getByRole('option', { name: /Misto quente/ }).click();
 await admin.getByRole('button', { name: /^Adicionar R\$/ }).click();
 await admin.screenshot({ path: `${SHOTS}/02-novo-pedido.png` });
+await cont(admin);
 await admin.getByRole('button', { name: 'Criar pedido' }).click();
+await admin.getByRole('dialog').waitFor({ state: 'detached' });
 await admin.getByText('Diego Alves').first().waitFor();
 log('novo pedido no banco:', sql(`select number||' '||status||' taxa='||delivery_fee||' total='||total||' lat='||coalesce(lat::text,'-') from delivery_orders where customer_name='Diego Alves'`));
 log('cliente salvo:', sql(`select count(*) from customers where phone='11977778888'`));

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Box, Typography, Button, TextField, IconButton, Chip, CircularProgress,
   Table, TableHead, TableRow, TableCell, TableBody, Dialog, DialogTitle,
-  DialogContent, DialogActions, Switch, Tooltip, MenuItem,
+  DialogContent, DialogActions, Switch, Tooltip, MenuItem, Alert,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
@@ -98,14 +98,25 @@ export function CollaboratorsTab() {
   const [company, setCompany] = useState(null);
   const [collaborators, setCollaborators] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [loadError, setLoadError] = useState("");
 
   const load = useCallback(async () => {
-    const [{ data: c }, { data: list }] = await Promise.all([
-      supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
-      supabase.from("profiles").select("*").eq("company_id", companyId).in("company_role", ["collaborator", "supervisor"]).order("name"),
-    ]);
-    setCompany(c);
-    setCollaborators(list || []);
+    setLoadError("");
+    try {
+      const [{ data: c, error: companyError }, { data: list, error: listError }] = await Promise.all([
+        supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
+        supabase.from("profiles").select("*").eq("company_id", companyId).in("company_role", ["collaborator", "supervisor"]).order("name"),
+      ]);
+      // Sem isso, um erro (ou empresa não encontrada) deixava o spinner girando pra sempre.
+      if (companyError || listError || !c) {
+        setLoadError((companyError || listError)?.message || "Empresa não encontrada.");
+        return;
+      }
+      setCompany(c);
+      setCollaborators(list || []);
+    } catch (err) {
+      setLoadError(err?.message || "Falha ao carregar.");
+    }
   }, [companyId]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -121,6 +132,14 @@ export function CollaboratorsTab() {
     if (error) { alert("Erro ao remover: " + error.message); return; }
     setCollaborators((prev) => prev.filter((p) => p.id !== id));
   };
+
+  if (loadError) {
+    return (
+      <Alert severity="error" action={<Button color="inherit" size="small" onClick={load}>Tentar de novo</Button>}>
+        Não foi possível carregar os colaboradores: {loadError}
+      </Alert>
+    );
+  }
 
   if (!company || collaborators === null) {
     return <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box>;
@@ -157,7 +176,7 @@ export function CollaboratorsTab() {
           </Typography>
         </Box>
         <Chip
-          label={`${seatsUsed} de ${company.seats_limit} vagas usadas`}
+          label={`${seatsUsed} de ${company.seats_limit} vagas usadas (colaboradores e supervisores)`}
           sx={{
             fontWeight: 700, fontSize: 12.5, height: 30,
             background: seatsFull ? "#F6EBEA" : "#F5F5F4",
@@ -168,7 +187,7 @@ export function CollaboratorsTab() {
 
       {seatsFull && (
         <Typography sx={{ fontSize: 12.5, color: "#B0793D", mb: 2 }}>
-          Limite de colaboradores atingido. Pra adicionar mais gente, fale com quem administra sua licença.
+          Limite de vagas atingido (colaboradores e supervisores contam). Pra adicionar mais gente, fale com quem administra sua licença.
         </Typography>
       )}
 

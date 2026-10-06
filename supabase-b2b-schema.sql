@@ -1470,6 +1470,11 @@ begin
     new.delivered_by_code := null; new.route_choice := null;
     new.courier_fee := null;
     new.created_by := auth.uid();
+    -- Cliente de outra empresa não entra (o RLS de customers só mostra os da própria).
+    if new.customer_id is not null
+       and not exists (select 1 from public.customers c where c.id = new.customer_id and c.company_id = new.company_id) then
+      new.customer_id := null;
+    end if;
   end if;
   return new;
 end;
@@ -1513,6 +1518,12 @@ begin
   end if;
   if new.order_type is distinct from old.order_type then
     raise exception 'O tipo do pedido (entrega ou local) não muda depois de criado.';
+  end if;
+  -- Pedido encerrado não muda valores nem forma de pagamento (caixa e acerto dependem deles).
+  if old.status in ('delivered', 'cancelled')
+     and (new.subtotal, new.payment_method, new.delivery_fee, new.change_for, new.items, new.customer_id)
+         is distinct from (old.subtotal, old.payment_method, old.delivery_fee, old.change_for, old.items, old.customer_id) then
+    raise exception 'Pedido encerrado não pode ser alterado.';
   end if;
   if new.order_type = 'local' then new.delivery_fee := null; end if;
   -- Pedido com produtos: o valor dos itens vem do cardápio (set_order_items).
@@ -1778,7 +1789,7 @@ begin
     if v_code.locked then
       return 'locked';
     end if;
-    if p_code is null or btrim(p_code) <> v_code.code then
+    if v_code.order_id is null or p_code is null or btrim(p_code) is distinct from v_code.code then
       update public.order_delivery_codes
         set failed_attempts = failed_attempts + 1, locked = failed_attempts + 1 >= 5
         where order_id = p_order_id;
@@ -3256,7 +3267,7 @@ begin
     where s.ended_at is null
       and (case when p_shift is null then s.courier_id = auth.uid() else s.id = p_shift end);
   if v.id is null then raise exception 'Nenhum expediente aberto.'; end if;
-  if v.courier_id <> auth.uid() and not (v.company_id = public.my_company_id() and public.is_order_manager()) then
+  if v.courier_id is distinct from auth.uid() and not (v.company_id = public.my_company_id() and public.is_order_manager()) then
     raise exception 'Sem permissão para encerrar este expediente.';
   end if;
   -- Fecha antes de devolver a saída, senão o despacho daria a ela de novo.
@@ -3276,11 +3287,11 @@ begin
   select * into v from public.courier_shifts s
     where s.ended_at is null and s.courier_id = coalesce(p_courier, auth.uid());
   if v.id is null then raise exception 'Nenhum expediente aberto.'; end if;
-  if v.courier_id <> auth.uid() and not (v.company_id = public.my_company_id() and public.is_order_manager()) then
+  if v.courier_id is distinct from auth.uid() and not (v.company_id = public.my_company_id() and public.is_order_manager()) then
     raise exception 'Sem permissão.';
   end if;
   update public.courier_shifts set paused = p_paused,
-    paused_reason = case when p_paused then case when v.courier_id = auth.uid() then 'Pausa' else 'Pausado pelo gestor' end end
+    paused_reason = case when p_paused then case when v.courier_id is not distinct from auth.uid() then 'Pausa' else 'Pausado pelo gestor' end end
     where id = v.id;
   if p_paused then perform public.release_planned_runs(v.courier_id); end if;
 end;
@@ -3329,6 +3340,677 @@ begin
 end;
 $$;
 grant execute on function public.complete_local_order(uuid) to authenticated;
+
+-- =====================================================================
+-- SEGURANÇA — REVISÃO 2 (06/10/2026)
+-- Testada em supabase/tests/29_seguranca_revisao2.sql.
+-- Regra usada em todas as checagens abaixo: comparar com "is distinct from"
+-- e exigir login. Com "<>", uma chamada sem login (auth.uid() nulo) dava
+-- NULL e passava direto pela checagem.
+-- =====================================================================
+
+-- Empresa suspensa perde o acesso aos dados (o painel mostra o aviso).
+create or replace function public.my_company_id()
+returns uuid language sql stable security definer set search_path = public as $$
+  select p.company_id from public.profiles p join public.companies c on c.id = p.company_id
+  where p.id = auth.uid() and c.status = 'active';
+$$;
+
+create or replace function public.my_company_status()
+returns text language sql stable security definer set search_path = public as $$
+  select c.status from public.profiles p join public.companies c on c.id = p.company_id where p.id = auth.uid();
+$$;
+grant execute on function public.my_company_status() to authenticated;
+
+-- Empresa de um perfil/serviço, para checagens dentro de policies (o RLS
+-- de profiles esconderia a linha de quem é de outra empresa).
+create or replace function public.profile_company(p_id uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select company_id from public.profiles where id = p_id;
+$$;
+create or replace function public.service_company(p_id uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select company_id from public.services where id = p_id;
+$$;
+
+-- Supervisor só enxerga a equipe enquanto for supervisor da mesma empresa.
+create or replace function public.my_supervised_ids()
+returns setof uuid language sql stable security definer set search_path = public as $$
+  select p.id from public.profiles p
+  where p.supervised_by = auth.uid() and p.company_id = public.my_company_id()
+    and public.my_company_role() = 'supervisor';
+$$;
+drop policy if exists profiles_supervisor_scope on public.profiles;
+create policy profiles_supervisor_scope on public.profiles
+  for select using (id in (select public.my_supervised_ids()));
+
+-- ---------- Entrar numa empresa ----------
+create or replace function public.redeem_license_key(p_key text)
+returns table(company_id uuid, company_name text)
+language plpgsql security definer set search_path = public as $$
+declare v_company record;
+begin
+  if auth.uid() is null then raise exception 'Entre na sua conta primeiro.'; end if;
+  if exists (select 1 from public.profiles p where p.id = auth.uid() and p.company_id is not null) then
+    raise exception 'Sua conta já faz parte de uma empresa.';
+  end if;
+  select c.id, c.name into v_company from public.companies c
+    where upper(btrim(c.license_key)) = upper(btrim(p_key)) and c.status = 'active'
+    for update;
+  if v_company.id is null then raise exception 'Chave de licença não encontrada ou inativa.'; end if;
+  -- A chave vale uma vez: com admin ativo, só com chave nova da plataforma.
+  if exists (select 1 from public.profiles p where p.company_id = v_company.id and p.company_role = 'company_admin') then
+    raise exception 'Esta licença já foi ativada. Peça uma chave nova ao administrador da plataforma.';
+  end if;
+  update public.profiles set company_id = v_company.id, company_role = 'company_admin', supervised_by = null where id = auth.uid();
+  perform public.log_audit(v_company.id, 'company_admin_joined', jsonb_build_object('user_id', auth.uid()));
+  return query select v_company.id, v_company.name;
+end;
+$$;
+
+create or replace function public.redeem_invite_code(p_code text)
+returns table(company_id uuid, company_name text)
+language plpgsql security definer set search_path = public as $$
+declare v_company record; v_seats_used int;
+begin
+  if auth.uid() is null then raise exception 'Entre na sua conta primeiro.'; end if;
+  if exists (select 1 from public.profiles p where p.id = auth.uid() and p.company_id is not null) then
+    raise exception 'Sua conta já faz parte de uma empresa. Peça para ser removido da anterior primeiro.';
+  end if;
+  -- "for update": dois convites ao mesmo tempo não furam o limite de vagas.
+  select c.id, c.name, c.seats_limit into v_company from public.companies c
+    where upper(btrim(c.collaborator_invite_code)) = upper(btrim(p_code)) and c.status = 'active'
+    for update;
+  if v_company.id is null then raise exception 'Código de convite não encontrado ou inativo.'; end if;
+  select count(*) into v_seats_used from public.profiles p
+    where p.company_id = v_company.id and p.company_role in ('collaborator', 'supervisor');
+  if v_seats_used >= v_company.seats_limit then
+    raise exception 'Essa empresa já atingiu o limite de % colaboradores.', v_company.seats_limit;
+  end if;
+  update public.profiles set company_id = v_company.id, company_role = 'collaborator', supervised_by = null where id = auth.uid();
+  perform public.log_audit(v_company.id, 'collaborator_joined', jsonb_build_object('user_id', auth.uid()));
+  return query select v_company.id, v_company.name;
+end;
+$$;
+grant execute on function public.redeem_license_key(text) to authenticated;
+grant execute on function public.redeem_invite_code(text) to authenticated;
+
+-- ---------- Remover colaborador / mudar papel ----------
+create or replace function public.remove_collaborator(p_collaborator_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_caller_company uuid := public.my_company_id(); v_target record;
+begin
+  if auth.uid() is null or v_caller_company is null or public.my_company_role() is distinct from 'company_admin' then
+    raise exception 'Somente administradores da empresa podem remover colaboradores.';
+  end if;
+  if p_collaborator_id = auth.uid() then raise exception 'Você não pode remover a si mesmo.'; end if;
+  select company_id, company_role into v_target from public.profiles where id = p_collaborator_id;
+  if v_target.company_id is distinct from v_caller_company then
+    raise exception 'Esse colaborador não pertence à sua empresa.';
+  end if;
+  update public.profiles set company_id = null, company_role = null, supervised_by = null where id = p_collaborator_id;
+  -- Quem ele supervisionava fica sem supervisor; expediente aberto é encerrado.
+  update public.profiles set supervised_by = null where supervised_by = p_collaborator_id;
+  update public.courier_shifts set ended_at = now(), closed_by = auth.uid()
+    where courier_id = p_collaborator_id and ended_at is null;
+  perform public.release_planned_runs(p_collaborator_id);
+  perform public.log_audit(v_caller_company, 'collaborator_removed', jsonb_build_object('collaborator_id', p_collaborator_id));
+end;
+$$;
+revoke execute on function public.remove_collaborator(uuid) from public, anon;
+grant execute on function public.remove_collaborator(uuid) to authenticated;
+
+create or replace function public.set_collaborator_role(p_collaborator_id uuid, p_role text, p_supervised_by uuid default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_caller_company uuid := public.my_company_id(); v_target record;
+begin
+  if auth.uid() is null or v_caller_company is null or public.my_company_role() is distinct from 'company_admin' then
+    raise exception 'Somente administradores da empresa podem alterar papéis.';
+  end if;
+  if p_role is null or p_role not in ('collaborator', 'supervisor') then raise exception 'Papel inválido.'; end if;
+  select company_id, company_role into v_target from public.profiles where id = p_collaborator_id;
+  if v_target.company_id is distinct from v_caller_company then
+    raise exception 'Essa pessoa não pertence à sua empresa.';
+  end if;
+  if v_target.company_role = 'company_admin' then
+    raise exception 'O papel de um administrador não muda por aqui.';
+  end if;
+  if p_supervised_by is not null and not exists (
+    select 1 from public.profiles where id = p_supervised_by and company_id = v_caller_company and company_role = 'supervisor') then
+    raise exception 'O supervisor indicado não é válido para esta empresa.';
+  end if;
+  update public.profiles
+    set company_role = p_role,
+        supervised_by = case when p_role = 'collaborator' then p_supervised_by else null end
+    where id = p_collaborator_id;
+  -- Deixou de ser supervisor: a equipe dele fica sem supervisor.
+  if p_role <> 'supervisor' then
+    update public.profiles set supervised_by = null where supervised_by = p_collaborator_id;
+  end if;
+  perform public.log_audit(v_caller_company, 'collaborator_role_changed',
+    jsonb_build_object('collaborator_id', p_collaborator_id, 'new_role', p_role));
+end;
+$$;
+revoke execute on function public.set_collaborator_role(uuid, text, uuid) from public, anon;
+grant execute on function public.set_collaborator_role(uuid, text, uuid) to authenticated;
+
+-- Auditoria só é gravada pelas funções do banco.
+revoke execute on function public.log_audit(uuid, text, jsonb) from public, anon, authenticated;
+
+-- ---------- Avisos e acerto ----------
+create or replace function public.notify_off_route(p_assignment_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare v record; admin_id uuid;
+begin
+  select a.company_id, a.collaborator_id, p.name into v
+    from public.assignments a left join public.profiles p on p.id = a.collaborator_id
+    where a.id = p_assignment_id;
+  if v.company_id is null or auth.uid() is null or v.collaborator_id is distinct from auth.uid() then return; end if;
+  for admin_id in select id from public.profiles where company_id = v.company_id and company_role = 'company_admin' loop
+    insert into public.notifications (company_id, user_id, type, title, message, assignment_id)
+    values (v.company_id, admin_id, 'off_route', 'Possível desvio de rota',
+      coalesce(v.name, 'O colaborador') || ' parece ter saído do trajeto previsto.', p_assignment_id);
+  end loop;
+end;
+$$;
+
+create or replace function public.preview_settlement(p_courier uuid, p_from date, p_to date)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Sem permissão.'; end if;
+  if p_courier is distinct from auth.uid() and not exists (
+    select 1 from public.profiles p where p.id = p_courier and p.company_id = public.my_company_id()
+      and public.my_company_role() = 'company_admin') then
+    raise exception 'Sem permissão.';
+  end if;
+  return public.compute_settlement(p_courier, p_from, p_to);
+end;
+$$;
+
+-- Notificações só são criadas pelo banco (nenhuma tela insere direto).
+drop policy if exists notifications_insert_within_company on public.notifications;
+
+-- ---------- Posições do motoboy ----------
+-- A hora da posição é a do servidor (não dá para inventar trajeto no passado).
+create or replace function public.location_pings_server_time()
+returns trigger language plpgsql as $$
+begin
+  if public.is_client_call() then new.recorded_at := now(); end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_location_pings_server_time on public.location_pings;
+create trigger trg_location_pings_server_time before insert on public.location_pings
+  for each row execute function public.location_pings_server_time();
+
+-- Km: ignora saltos acima de 2 km e trechos acima de 150 km/h (GPS errado ou fraude).
+create or replace function public.courier_km(p_courier uuid, p_from timestamptz, p_to timestamptz)
+returns numeric language sql stable security definer set search_path = public as $$
+  select coalesce(round((sum(d) / 1000)::numeric, 2), 0)
+  from (
+    select public.geo_distance_m(lag(lat) over w, lag(lng) over w, lat, lng) as d,
+           extract(epoch from recorded_at - lag(recorded_at) over w) as dt
+    from public.location_pings
+    where courier_id = p_courier and recorded_at >= p_from and recorded_at < p_to
+    window w as (order by recorded_at)
+  ) x
+  where d is not null and d < 2000 and d <= greatest(dt, 1) * 41.7
+$$;
+revoke execute on function public.courier_km(uuid, timestamptz, timestamptz) from public, anon, authenticated;
+
+-- ---------- Chat ----------
+-- Mensagem e chave sempre na empresa do colaborador da conversa; ninguém
+-- reescreve mensagem (só marca como lida); a chave não muda de empresa.
+drop policy if exists chat_messages_insert on public.chat_messages;
+create policy chat_messages_insert on public.chat_messages
+  for insert with check (
+    sender_id = auth.uid()
+    and company_id = public.profile_company(collaborator_id)
+    and (
+      collaborator_id = auth.uid()
+      or (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+      or collaborator_id in (select public.my_supervised_ids())
+      or public.is_platform_admin()
+    )
+  );
+
+create or replace function public.guard_chat_messages()
+returns trigger language plpgsql as $$
+begin
+  if public.is_client_call() and not public.is_platform_admin()
+     and (to_jsonb(new) - array['read_by_admin', 'read_by_collaborator'])
+         is distinct from (to_jsonb(old) - array['read_by_admin', 'read_by_collaborator']) then
+    raise exception 'Mensagem enviada não pode ser alterada.';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_guard_chat_messages on public.chat_messages;
+create trigger trg_guard_chat_messages before update on public.chat_messages
+  for each row execute function public.guard_chat_messages();
+
+drop policy if exists chat_keys_room_access on public.chat_keys;
+drop policy if exists chat_keys_read on public.chat_keys;
+create policy chat_keys_read on public.chat_keys
+  for select using (
+    collaborator_id = auth.uid()
+    or (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or collaborator_id in (select public.my_supervised_ids())
+    or public.is_platform_admin()
+  );
+drop policy if exists chat_keys_insert on public.chat_keys;
+create policy chat_keys_insert on public.chat_keys
+  for insert with check (
+    company_id = public.profile_company(collaborator_id)
+    and (
+      collaborator_id = auth.uid()
+      or (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+      or collaborator_id in (select public.my_supervised_ids())
+      or public.is_platform_admin()
+    )
+  );
+
+-- ---------- Designações, folgas e fotos ----------
+drop policy if exists assignments_admin_scope on public.assignments;
+create policy assignments_admin_scope on public.assignments
+  for all using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+  with check (
+    company_id = public.my_company_id() and public.my_company_role() = 'company_admin'
+    and (collaborator_id is null or public.profile_company(collaborator_id) = company_id)
+    and (service_id is null or public.service_company(service_id) = company_id)
+  );
+
+drop policy if exists assignments_supervisor_scope on public.assignments;
+create policy assignments_supervisor_scope on public.assignments
+  for all using (company_id = public.my_company_id() and collaborator_id in (select public.my_supervised_ids()))
+  with check (
+    company_id = public.my_company_id() and collaborator_id in (select public.my_supervised_ids())
+    and (service_id is null or public.service_company(service_id) = company_id)
+  );
+
+drop policy if exists collaborator_time_off_scope on public.collaborator_time_off;
+create policy collaborator_time_off_scope on public.collaborator_time_off
+  for all using (
+    collaborator_id = auth.uid()
+    or (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+    or public.is_platform_admin()
+  )
+  with check (
+    company_id = public.profile_company(collaborator_id)
+    and (
+      collaborator_id = auth.uid()
+      or (company_id = public.my_company_id() and public.my_company_role() = 'company_admin')
+      or public.is_platform_admin()
+    )
+  );
+
+-- Fotos e assinatura: quem vê a designação vê e anexa; só o admin apaga.
+drop policy if exists assignment_photos_company_scope on public.assignment_photos;
+drop policy if exists assignment_photos_read on public.assignment_photos;
+create policy assignment_photos_read on public.assignment_photos
+  for select using (
+    exists (select 1 from public.assignments a where a.id = assignment_id)
+    and (company_id = public.my_company_id() or public.is_platform_admin())
+  );
+drop policy if exists assignment_photos_insert on public.assignment_photos;
+create policy assignment_photos_insert on public.assignment_photos
+  for insert with check (
+    exists (select 1 from public.assignments a where a.id = assignment_id and a.company_id = company_id)
+    and (company_id = public.my_company_id() or public.is_platform_admin())
+    and uploaded_by = auth.uid()
+  );
+drop policy if exists assignment_photos_admin_delete on public.assignment_photos;
+create policy assignment_photos_admin_delete on public.assignment_photos
+  for delete using (
+    (company_id = public.my_company_id() and public.my_company_role() = 'company_admin') or public.is_platform_admin()
+  );
+
+drop policy if exists assignment_photos_storage_access on storage.objects;
+drop policy if exists assignment_photos_storage_read on storage.objects;
+create policy assignment_photos_storage_read on storage.objects
+  for select using (
+    bucket_id = 'assignment-photos'
+    and exists (select 1 from public.assignments a where a.id::text = (storage.foldername(name))[1])
+  );
+drop policy if exists assignment_photos_storage_insert on storage.objects;
+create policy assignment_photos_storage_insert on storage.objects
+  for insert with check (
+    bucket_id = 'assignment-photos'
+    and exists (select 1 from public.assignments a where a.id::text = (storage.foldername(name))[1])
+  );
+drop policy if exists assignment_photos_storage_admin_delete on storage.objects;
+create policy assignment_photos_storage_admin_delete on storage.objects
+  for delete using (
+    bucket_id = 'assignment-photos'
+    and exists (select 1 from public.assignments a where a.id::text = (storage.foldername(name))[1]
+                and ((a.company_id = public.my_company_id() and public.my_company_role() = 'company_admin') or public.is_platform_admin()))
+  );
+
+-- Marca própria: só imagens PNG, JPEG ou WebP (nada de SVG).
+drop policy if exists company_branding_write on storage.objects;
+create policy company_branding_write on storage.objects
+  for all using (
+    bucket_id = 'company-branding'
+    and (storage.foldername(name))[1] = public.my_company_id()::text
+    and public.my_company_role() = 'company_admin'
+    and exists (select 1 from public.companies c where c.id = public.my_company_id() and c.feature_branding)
+  )
+  with check (
+    bucket_id = 'company-branding'
+    and (storage.foldername(name))[1] = public.my_company_id()::text
+    and public.my_company_role() = 'company_admin'
+    and lower(name) ~ '\.(png|jpe?g|webp)$'
+    and exists (select 1 from public.companies c where c.id = public.my_company_id() and c.feature_branding)
+  );
+
+-- ---------- Perfil: colunas antigas também protegidas ----------
+create or replace function public.guard_profiles()
+returns trigger language plpgsql as $$
+declare j_new jsonb; j_old jsonb;
+begin
+  if not public.is_client_call() or public.is_platform_admin() then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    j_new := to_jsonb(new);
+    if coalesce(new.is_platform_admin, false) or new.company_id is not null
+       or new.company_role is not null or new.supervised_by is not null
+       or coalesce((j_new->>'is_admin')::boolean, false) or coalesce((j_new->>'wallet_balance')::numeric, 0) <> 0 then
+      raise exception 'Perfil novo não pode vir com papel, empresa ou supervisor.';
+    end if;
+  else
+    j_new := to_jsonb(new); j_old := to_jsonb(old);
+    if new.is_platform_admin is distinct from old.is_platform_admin
+       or new.company_id is distinct from old.company_id
+       or new.company_role is distinct from old.company_role
+       or new.supervised_by is distinct from old.supervised_by
+       or j_new->'is_admin' is distinct from j_old->'is_admin'
+       or j_new->'is_worker' is distinct from j_old->'is_worker'
+       or j_new->'wallet_balance' is distinct from j_old->'wallet_balance' then
+      raise exception 'Papel, empresa e supervisor só mudam pelas funções do sistema.';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+-- ---------- Avaliação do cliente ----------
+-- O link de avaliação fica numa tabela só do gestor: o motoboy lia o próprio
+-- link na designação e conseguia se dar nota. Nota só muda pelo link.
+create table if not exists public.assignment_rating_tokens (
+  assignment_id uuid primary key references public.assignments(id) on delete cascade,
+  company_id uuid not null references public.companies(id) on delete cascade,
+  token uuid not null unique default gen_random_uuid()
+);
+alter table public.assignment_rating_tokens enable row level security;
+drop policy if exists assignment_rating_tokens_managers on public.assignment_rating_tokens;
+create policy assignment_rating_tokens_managers on public.assignment_rating_tokens
+  for select using (
+    (company_id = public.my_company_id() and public.my_company_role() in ('company_admin', 'supervisor'))
+    or public.is_platform_admin()
+  );
+
+insert into public.assignment_rating_tokens (assignment_id, company_id, token)
+  select a.id, a.company_id, a.rating_token from public.assignments a where a.rating_token is not null
+  on conflict (assignment_id) do nothing;
+insert into public.assignment_rating_tokens (assignment_id, company_id)
+  select a.id, a.company_id from public.assignments a
+  where not exists (select 1 from public.assignment_rating_tokens t where t.assignment_id = a.id);
+alter table public.assignments alter column rating_token drop default;
+update public.assignments set rating_token = null where rating_token is not null;
+
+create or replace function public.assignment_rating_token_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.assignment_rating_tokens (assignment_id, company_id) values (new.id, new.company_id)
+    on conflict (assignment_id) do nothing;
+  return new;
+end;
+$$;
+drop trigger if exists trg_assignment_rating_token on public.assignments;
+create trigger trg_assignment_rating_token after insert on public.assignments
+  for each row execute function public.assignment_rating_token_insert();
+
+create or replace function public.guard_assignment_rating()
+returns trigger language plpgsql as $$
+begin
+  if public.is_client_call() and not public.is_platform_admin()
+     and (new.customer_rating is distinct from old.customer_rating
+       or new.customer_feedback is distinct from old.customer_feedback
+       or new.rated_at is distinct from old.rated_at
+       or new.rating_token is distinct from old.rating_token) then
+    raise exception 'A avaliação só é feita pelo cliente, pelo link.';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_guard_assignment_rating on public.assignments;
+create trigger trg_guard_assignment_rating before update on public.assignments
+  for each row execute function public.guard_assignment_rating();
+
+create or replace function public.get_rating_context(p_token uuid)
+returns table(service_name text, scheduled_start timestamptz, already_rated boolean)
+language plpgsql security definer set search_path = public as $$
+begin
+  return query
+  select s.name, a.scheduled_start, (a.customer_rating is not null)
+  from public.assignment_rating_tokens t
+  join public.assignments a on a.id = t.assignment_id
+  join public.services s on s.id = a.service_id
+  where t.token = p_token;
+end;
+$$;
+
+create or replace function public.submit_rating(p_token uuid, p_rating int, p_feedback text default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if p_rating is null or p_rating < 1 or p_rating > 5 then raise exception 'A nota precisa ser de 1 a 5.'; end if;
+  select a.id into v_id from public.assignment_rating_tokens t join public.assignments a on a.id = t.assignment_id
+    where t.token = p_token and a.status = 'completed' and a.customer_rating is null
+    for update of a;
+  if v_id is null then raise exception 'Link inválido, expirado, ou este atendimento já foi avaliado.'; end if;
+  update public.assignments set customer_rating = p_rating, customer_feedback = left(p_feedback, 2000), rated_at = now()
+    where id = v_id;
+end;
+$$;
+
+create or replace function public.get_rating_branding(p_token uuid)
+returns table(company_name text, brand_color text, brand_logo_url text, brand_share_url text)
+language sql stable security definer set search_path = public as $$
+  select c.name,
+         case when c.feature_branding then c.brand_color end,
+         case when c.feature_branding then c.brand_logo_url end,
+         case when c.feature_branding then c.brand_share_url end
+  from public.assignment_rating_tokens t
+  join public.companies c on c.id = t.company_id
+  where t.token = p_token
+$$;
+
+-- Empresa suspensa continua vendo as próprias faturas (para poder pagar).
+drop policy if exists license_invoices_company on public.license_invoices;
+create policy license_invoices_company on public.license_invoices
+  for select using (company_id = public.profile_company(auth.uid()) and public.my_company_role() = 'company_admin');
+
+-- Motoboy de empresa suspensa também perde o acesso.
+drop policy if exists assignments_collaborator_select on public.assignments;
+create policy assignments_collaborator_select on public.assignments
+  for select using (collaborator_id = auth.uid() and company_id = public.my_company_id());
+drop policy if exists assignments_collaborator_update on public.assignments;
+create policy assignments_collaborator_update on public.assignments
+  for update using (collaborator_id = auth.uid() and company_id = public.my_company_id())
+  with check (collaborator_id = auth.uid() and company_id = public.my_company_id());
+drop policy if exists delivery_orders_courier_read on public.delivery_orders;
+create policy delivery_orders_courier_read on public.delivery_orders
+  for select using (courier_id = auth.uid() and company_id = public.my_company_id());
+
+-- Logo da marca: só imagens comuns (SVG pode carregar script).
+do $$ begin
+  update storage.buckets set allowed_mime_types = array['image/png', 'image/jpeg', 'image/webp'] where id = 'company-branding';
+exception when undefined_column then null;
+end $$;
+
+-- Foto/assinatura grava quem enviou mesmo se o app não mandar.
+alter table public.assignment_photos alter column uploaded_by set default auth.uid();
+
+-- ---------------------------------------------------------------------
+-- Modo cozinha: tela cheia com a fila de preparo.
+-- Abre com login de gestor ou por um link próprio da tela (sem login),
+-- que só enxerga a fila de preparo: sem telefone, endereço nem valores.
+-- O link fica numa tabela à parte (companies é lida pelos motoboys).
+-- ---------------------------------------------------------------------
+create table if not exists public.kitchen_displays (
+  company_id uuid primary key references public.companies(id) on delete cascade,
+  token text not null unique,
+  created_at timestamptz not null default now()
+);
+alter table public.kitchen_displays enable row level security;
+drop policy if exists kitchen_displays_admin on public.kitchen_displays;
+create policy kitchen_displays_admin on public.kitchen_displays
+  for select using (company_id = public.my_company_id() and public.my_company_role() = 'company_admin');
+
+-- Admin pega (ou troca, invalidando o link antigo) o link da tela da cozinha.
+create or replace function public.kitchen_display_token(p_reset boolean default false)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_company uuid := public.my_company_id(); v_token text;
+begin
+  if v_company is null or public.my_company_role() is distinct from 'company_admin' then
+    raise exception 'Só o admin da empresa gera o link da cozinha.';
+  end if;
+  v_token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  if p_reset then
+    insert into public.kitchen_displays (company_id, token) values (v_company, v_token)
+      on conflict (company_id) do update set token = excluded.token, created_at = now();
+  else
+    insert into public.kitchen_displays (company_id, token) values (v_company, v_token)
+      on conflict (company_id) do nothing;
+  end if;
+  select token into v_token from public.kitchen_displays where company_id = v_company;
+  return v_token;
+end;
+$$;
+revoke execute on function public.kitchen_display_token(boolean) from public, anon;
+grant execute on function public.kitchen_display_token(boolean) to authenticated;
+
+create or replace function public.kitchen_company(p_token text)
+returns uuid language plpgsql stable security definer set search_path = public as $$
+declare v uuid;
+begin
+  if p_token is null then
+    if public.is_order_manager() then return public.my_company_id(); end if;
+    raise exception 'Sem permissão.';
+  end if;
+  select k.company_id into v from public.kitchen_displays k join public.companies c on c.id = k.company_id
+    where k.token = p_token and length(p_token) >= 32 and c.status = 'active';
+  if v is null then raise exception 'Link da cozinha inválido ou trocado. Peça o link novo ao admin.'; end if;
+  return v;
+end;
+$$;
+revoke execute on function public.kitchen_company(text) from public, anon, authenticated;
+
+-- Fila de preparo (recebidos e em preparo, mais antigos primeiro) e os prontos recentes.
+create or replace function public.kitchen_board(p_token text default null)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v_company uuid := public.kitchen_company(p_token);
+begin
+  return jsonb_build_object(
+    'company', (select name from public.companies where id = v_company),
+    'now', now(),
+    'orders', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', o.id, 'number', o.number, 'order_type', o.order_type, 'status', o.status,
+        'customer_name', o.customer_name, 'notes', o.notes, 'created_at', o.created_at,
+        'items_text', o.items,
+        'items', coalesce((select jsonb_agg(jsonb_build_object(
+            'name', i.name, 'variant', i.variant, 'quantity', i.quantity, 'notes', i.notes,
+            'addons', (select coalesce(jsonb_agg(a->>'name'), '[]'::jsonb) from jsonb_array_elements(i.addons) a))
+            order by i.position) from public.delivery_order_items i where i.order_id = o.id), '[]'::jsonb))
+        order by o.created_at, o.number)
+      from public.delivery_orders o
+      where o.company_id = v_company and o.status in ('received', 'preparing') and o.run_id is null), '[]'::jsonb),
+    'ready', coalesce((select jsonb_agg(jsonb_build_object('number', o.number, 'customer_name', o.customer_name, 'order_type', o.order_type)
+        order by o.ready_at desc)
+      from (select * from public.delivery_orders o
+            where o.company_id = v_company and o.status = 'ready' and o.ready_at > now() - interval '2 hours'
+            order by o.ready_at desc limit 12) o), '[]'::jsonb)
+  );
+end;
+$$;
+revoke execute on function public.kitchen_board(text) from public;
+grant execute on function public.kitchen_board(text) to anon, authenticated;
+
+-- Botão da cozinha: recebido → em preparo → pronto (só para a frente).
+create or replace function public.kitchen_advance(p_order_id uuid, p_token text default null)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_company uuid := public.kitchen_company(p_token); v_status text;
+begin
+  update public.delivery_orders
+    set status = case status when 'received' then 'preparing' else 'ready' end,
+        ready_at = case when status = 'preparing' then coalesce(ready_at, now()) else ready_at end
+    where id = p_order_id and company_id = v_company and run_id is null and status in ('received', 'preparing')
+    returning status into v_status;
+  if v_status is null then raise exception 'Pedido não está mais na fila de preparo.'; end if;
+  return v_status;
+end;
+$$;
+revoke execute on function public.kitchen_advance(uuid, text) from public;
+grant execute on function public.kitchen_advance(uuid, text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).
+-- O Supabase dá EXECUTE de toda função para anon. Aqui quem já podia
+-- (logado) continua podendo, e o visitante sem login só chama as funções
+-- das páginas públicas (avaliação e tela da cozinha) e as usadas pelas
+-- regras de acesso. Funções novas também nascem fechadas para anon.
+-- ---------------------------------------------------------------------
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as fn
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.prokind = 'f'
+      and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
+  loop
+    if has_function_privilege('authenticated', r.fn, 'execute') then
+      execute format('grant execute on function %s to authenticated', r.fn);
+    end if;
+    execute format('revoke execute on function %s from public, anon', r.fn);
+  end loop;
+end $$;
+
+do $$
+declare f text;
+begin
+  foreach f in array array[
+    'get_rating_context(uuid)', 'submit_rating(uuid, integer, text)', 'get_rating_branding(uuid)',
+    'kitchen_board(text)', 'kitchen_advance(uuid, text)',
+    'is_platform_admin()', 'my_company_id()', 'my_company_role()', 'is_order_manager()',
+    'my_supervised_ids()', 'is_client_call()', 'profile_company(uuid)', 'service_company(uuid)']
+  loop
+    if to_regprocedure('public.' || f) is not null then
+      execute format('grant execute on function public.%s to anon', f);
+    else
+      raise notice 'função pública não encontrada: %', f;
+    end if;
+  end loop;
+end $$;
+
+alter default privileges in schema public revoke execute on functions from public, anon;
+
+-- Funções que rodam como dono (security definer) ficam com o search_path fixo,
+-- para ninguém trocar uma tabela/função por outra de mesmo nome.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as fn
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.prosecdef and p.proconfig is null
+      and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
+  loop
+    execute format('alter function %s set search_path = public, extensions', r.fn);
+  end loop;
+end $$;
 
 -- Atualiza o cache do Supabase (evita "Could not find the column ... in the schema cache").
 notify pgrst, 'reload schema';
