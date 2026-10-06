@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Box, Table, TableHead, TableRow, TableCell, TableBody, CircularProgress } from "@mui/material";
+import { Box, Table, TableHead, TableRow, TableCell, TableBody } from "@mui/material";
 import AppShell from "../components/AppShell";
 import ReceiptLongOutlinedIcon from "@mui/icons-material/ReceiptLongOutlined";
 import MapOutlinedIcon from "@mui/icons-material/MapOutlined";
@@ -13,6 +13,7 @@ import { OrdersTab } from "./company/OrdersTab";
 import { LiveMapTab } from "./company/LiveMapTab";
 import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
+import PageLoading from "../components/PageLoading";
 
 const TABS = [
   { key: "orders", label: "Pedidos", icon: <ReceiptLongOutlinedIcon /> },
@@ -37,7 +38,7 @@ function MyTeam({ myId }) {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
-  if (team === null) return <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box>;
+  if (team === null) return <PageLoading />;
   if (team.length === 0) return <Box sx={{ py: 6, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>Nenhum colaborador atribuído a você ainda — fale com o admin da empresa.</Box>;
 
   return (

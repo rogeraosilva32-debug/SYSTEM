@@ -33,6 +33,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import PlatformPlans, { PlanPicker } from "./platform/PlatformPlans";
 import PlatformNoticesAdmin from "./platform/PlatformNoticesAdmin";
+import PageLoading from "../components/PageLoading";
 
 function copyToClipboard(text) {
   navigator.clipboard?.writeText(text).catch(() => {});
@@ -442,7 +443,7 @@ export default function PlatformAdmin() {
       ) : selected ? (
         <CompanyDetail company={selected} onBack={() => setSelected(null)} onUpdated={handleUpdated} />
       ) : companies === null ? (
-        <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>
+        <PageLoading />
       ) : companies.length === 0 ? (
         <Box sx={{ py: 8, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>
           Nenhuma empresa cadastrada ainda. Clique em "Nova empresa" pra começar.

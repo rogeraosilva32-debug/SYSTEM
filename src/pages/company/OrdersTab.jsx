@@ -30,6 +30,7 @@ import {
   ORDER_STATUS, PAYMENT_LABEL, SOURCE_LABEL, money, orderAddress, whatsappUrl,
   deliveryCodeMessage, groupByNeighborhood, suggestStopOrder, parsePrice, itemUnitPrice,
 } from "../../utils/delivery";
+import PageLoading from "../../components/PageLoading";
 
 const COLUMNS = ["received", "preparing", "ready", "on_route", "problem"];
 const isLocal = (o) => o?.order_type === "local";
@@ -842,7 +843,7 @@ function ShiftPanel({ shifts, couriers, runs, onChanged }) {
               <Button size="small" onClick={() => act(() => supabase.rpc("set_shift_paused", { p_paused: !sh.paused, p_courier: sh.courier_id }))}>
                 {sh.paused ? "Liberar" : "Pausar"}
               </Button>
-              <Button size="small" color="inherit" onClick={() => { if (window.confirm(`Encerrar o expediente de ${name}?`)) act(() => supabase.rpc("end_shift", { p_shift: sh.id })); }}>
+              <Button size="small" color="inherit" onClick={() => { if (window.confirm(`Encerrar o expediente de ${name}? As entregas que ainda não foram finalizadas voltam para a fila.`)) act(() => supabase.rpc("end_shift", { p_shift: sh.id })); }}>
                 Encerrar
               </Button>
             </Box>
@@ -953,7 +954,7 @@ export function OrdersTab() {
     setSelected(next);
   };
 
-  if (orders === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (orders === null) return <PageLoading />;
   const auto = autoDispatch;
 
   return (

@@ -11,6 +11,7 @@ import ChatPanel from "../../components/ChatPanel";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { getOrCreateRoomKey, encryptMessage } from "../../utils/chatCrypto";
+import PageLoading from "../../components/PageLoading";
 
 const POLL_MS = 20000;
 
@@ -136,7 +137,7 @@ export function MessagesTab() {
   }, [collaborators, activity, search]);
 
   if (collaborators === null) {
-    return <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box>;
+    return <PageLoading />;
   }
 
   if (collaborators.length === 0) {

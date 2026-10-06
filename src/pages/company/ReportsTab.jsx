@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Box, Typography, Button, CircularProgress, Alert, Table, TableHead, TableRow, TableCell, TableBody,
+  Box, Typography, Button, Alert, Table, TableHead, TableRow, TableCell, TableBody,
 } from "@mui/material";
 import PrintOutlinedIcon from "@mui/icons-material/PrintOutlined";
 import supabase from "../../services/supabase";
 import { money, PAYMENT_LABEL, SOURCE_LABEL } from "../../utils/delivery";
 import { periodRange, formatDate, minutes, km, downloadCsv } from "../../utils/reports";
 import { PeriodPicker, Stat, StatGrid, Section, BarList, DayBars } from "../../components/ReportParts";
+import PageLoading from "../../components/PageLoading";
 
 const paymentLabel = (k) => PAYMENT_LABEL[k] || "Não informado";
 
@@ -80,7 +81,7 @@ export function ReportsTab({ companyId = null }) {
       </Typography>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      {loading && !fin && <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>}
+      {loading && !fin && <PageLoading />}
 
       {t && (
         <>

@@ -10,6 +10,7 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import EditIcon from "@mui/icons-material/EditOutlined";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
+import PageLoading from "../../components/PageLoading";
 
 function copyToClipboard(text) {
   navigator.clipboard?.writeText(text).catch(() => {});
@@ -142,7 +143,7 @@ export function CollaboratorsTab() {
   }
 
   if (!company || collaborators === null) {
-    return <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box>;
+    return <PageLoading />;
   }
 
   const seatsUsed = collaborators.length;
@@ -315,7 +316,7 @@ export function ServicesTab() {
       </Box>
 
       {services === null ? (
-        <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box>
+        <PageLoading />
       ) : (
         <Table size="small">
           <TableHead>

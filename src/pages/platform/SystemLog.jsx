@@ -5,6 +5,7 @@ import {
 import RefreshIcon from "@mui/icons-material/Refresh";
 import DownloadIcon from "@mui/icons-material/Download";
 import supabase from "../../services/supabase";
+import PageLoading from "../../components/PageLoading";
 
 // Log do sistema, no estilo do log do Mikrotik: uma linha por evento com
 // hora, tópicos (assunto + nível) e a mensagem; clicando, abre o detalhe
@@ -286,7 +287,7 @@ export default function SystemLog({ companyId = null }) {
       {error && <Alert severity="warning" sx={{ mb: 2 }}>{error}</Alert>}
 
       {rows === null ? (
-        <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box>
+        <PageLoading />
       ) : rows.length === 0 && !error ? (
         <Box sx={{ py: 6, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>Nenhum evento com esses filtros.</Box>
       ) : (

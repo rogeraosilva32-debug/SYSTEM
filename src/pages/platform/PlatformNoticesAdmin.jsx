@@ -5,6 +5,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import supabase from "../../services/supabase";
+import PageLoading from "../../components/PageLoading";
 
 const LEVELS = [
   { key: "info", label: "Informação", color: "#1F4E80", bg: "#EEF4FB" },
@@ -115,7 +116,7 @@ export default function PlatformNoticesAdmin({ companies }) {
     if (err) setError(err.message); else load();
   };
 
-  if (notices === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (notices === null) return <PageLoading />;
   const nowMs = notices.length ? new Date().getTime() : 0;
   const state = (n) => (new Date(n.starts_at).getTime() > nowMs ? "Agendado"
     : n.ends_at && new Date(n.ends_at).getTime() <= nowMs ? "Encerrado" : "No ar");

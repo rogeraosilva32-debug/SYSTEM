@@ -6,6 +6,7 @@ import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
 import { money } from "../utils/delivery";
 import { periodRange, formatDate, km, loadError } from "../utils/reports";
+import PageLoading from "../components/PageLoading";
 
 // Ganhos do motoboy: prévia do período (mesmo cálculo do acerto) e
 // acertos já fechados pela empresa.
@@ -36,7 +37,7 @@ export default function CourierEarnings() {
       <PeriodPicker value={range} onChange={setRange} />
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {listError && <Alert severity="error" sx={{ mb: 2 }}>{listError}</Alert>}
-      {error ? null : !preview ? <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box> : (
+      {error ? null : !preview ? <PageLoading /> : (
         <>
           <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, 1fr)" }, gap: 1.5, mb: 1 }}>
             <Stat label="Previsto no período" value={money(preview.total)} tone="good" />

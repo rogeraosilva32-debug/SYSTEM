@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
+import { RouteLoading } from "./PageLoading";
 
 // Situação da licença da empresa, consultada uma vez por usuário/empresa na
 // sessão. Erro na RPC (ex: função ainda não criada no banco) conta como
@@ -35,7 +36,7 @@ export default function CompanySuspendedGate({ children }) {
   }, [cacheKey]);
 
   if (!needsCheck) return children;
-  if (result.key !== cacheKey) return null;
+  if (result.key !== cacheKey) return <RouteLoading />;
   if (result.status !== "suspended") return children;
 
   return (

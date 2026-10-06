@@ -19,6 +19,7 @@ import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { forwardGeocode } from "../../utils/geocoding";
 import { downloadCsv } from "../../utils/csvExport";
+import PageLoading from "../../components/PageLoading";
 
 const STATUS_LABEL = {
   scheduled: "Agendada", en_route: "A caminho", in_progress: "Em andamento",
@@ -459,7 +460,7 @@ export function AssignmentsTab() {
       )}
 
       {assignments === null ? (
-        <Box sx={{ py: 6, textAlign: "center" }}><CircularProgress size={24} /></Box>
+        <PageLoading />
       ) : assignments.length === 0 ? (
         <Box sx={{ py: 6, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>Nenhuma designação ainda.</Box>
       ) : view === "calendar" ? (

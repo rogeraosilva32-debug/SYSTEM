@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Box, Typography, CircularProgress } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
 import L from "leaflet";
 import supabase from "../../services/supabase";
@@ -7,6 +7,7 @@ import { useAuth } from "../../context/AuthContext";
 import { orderAddress } from "../../utils/delivery";
 import { fetchMultiStopRoute } from "../../utils/geocoding";
 import { useCompanySettings } from "../../hooks/useCompanySettings";
+import PageLoading from "../../components/PageLoading";
 
 const storeIcon = new L.DivIcon({
   className: "",
@@ -109,7 +110,7 @@ export function LiveMapTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planKey, store?.lat, store?.lng]);
 
-  if (couriers === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (couriers === null) return <PageLoading />;
 
   const located = couriers.filter((c) => c.last_lat && c.last_lng);
   const allStops = runs.flatMap((r) => (r.orders || []).filter((o) => o.lat && o.lng));

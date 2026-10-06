@@ -9,6 +9,7 @@ import { useAuth } from "../../context/AuthContext";
 import { money, PAYMENT_LABEL, parsePrice } from "../../utils/delivery";
 import { today, periodRange, formatDate, km, downloadCsv, CASH_KIND, loadError } from "../../utils/reports";
 import { Stat, StatGrid, Section, BarList } from "../../components/ReportParts";
+import PageLoading from "../../components/PageLoading";
 
 const SUBTABS = [
   { key: "cash", label: "Caixa do dia" },
@@ -87,7 +88,7 @@ function CashDay({ companyId }) {
     load();
   });
 
-  if (!data) return <Box sx={{ py: 8, textAlign: "center" }}>{error ? <Alert severity="error">{error}</Alert> : <CircularProgress size={26} />}</Box>;
+  if (!data) return error ? <Alert severity="error">{error}</Alert> : <PageLoading />;
 
   const isToday = day === today();
   const expected = Number(data.opening) + Number(data.cash_received) + Number(data.deposits) - Number(data.withdrawals) - Number(data.expenses);
@@ -405,7 +406,7 @@ function Rates({ companyId }) {
   };
 
   if (company === false) return <Alert severity="error">{msg?.text}</Alert>;
-  if (!company) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (!company) return <PageLoading />;
 
   const field = (value) => (value === null || value === undefined ? "" : String(value));
   const parseOrNull = (v) => (String(v).trim() === "" ? null : num(v));

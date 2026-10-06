@@ -6,6 +6,7 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import supabase from "../../services/supabase";
 import { money } from "../../utils/delivery";
+import PageLoading from "../../components/PageLoading";
 
 const toNumber = (v) => Number(String(v).replace(",", "."));
 const EMPTY = { name: "", monthly_price: "0", seats_limit: "5", max_orders_month: "", feature_branding: false, feature_delivery_code: false, active: true };
@@ -95,7 +96,7 @@ export default function PlatformPlans() {
     if (err) setError(err.message); else load();
   };
 
-  if (plans === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (plans === null) return <PageLoading />;
 
   return (
     <Box>

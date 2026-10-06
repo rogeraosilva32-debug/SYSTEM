@@ -5,6 +5,7 @@ import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { refreshCompanySettings } from "../../hooks/useCompanySettings";
 import { BRAND_SLOTS, checkBrandImage, brandAccept } from "../../utils/branding";
+import PageLoading from "../../components/PageLoading";
 
 function SlotCard({ slot, value, companyId, onSaved }) {
   const [preview, setPreview] = useState(null);
@@ -97,7 +98,7 @@ export function BrandingTab() {
     if (!error) load();
   };
 
-  if (!company) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (!company) return <PageLoading />;
   if (!company.feature_branding) {
     return <Alert severity="info">A marca própria ainda não foi liberada para a sua empresa. Fale com o administrador da plataforma.</Alert>;
   }

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import { Box, Typography, CircularProgress, Alert, Button, Chip } from "@mui/material";
+import { Box, Typography, Alert, Button, Chip } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import supabase from "../../services/supabase";
 import { Stat, StatGrid, Section } from "../../components/ReportParts";
 import { money } from "../../utils/delivery";
 import PlatformAlerts from "./PlatformAlerts";
+import PageLoading from "../../components/PageLoading";
 
 const REFRESH_MS = 60000;
 
@@ -41,7 +42,7 @@ export default function PlatformOverview({ onOpenCompany, onOpenLog, onAlertCoun
     return () => clearInterval(t);
   }, [load]);
 
-  if (data === null) return <Box sx={{ py: 8, textAlign: "center" }}><CircularProgress size={26} /></Box>;
+  if (data === null) return <PageLoading />;
   if (data === false) return <Alert severity="warning">{error}</Alert>;
 
   const t = data.today || {};
