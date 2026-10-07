@@ -58,7 +58,12 @@ const monitoredFetch = async (input, init) => {
           { status: 403, headers: { "Content-Type": "application/json" } });
       }
     }
-    if (!skip && res.status >= 500) fetchMonitor.onProblem?.({ kind: "http", status: res.status, url });
+    // Erro 5xx: o corpo diz o motivo (ex.: 57014 = demorou demais, 40P01 =
+    // conflito entre duas gravações); vai junto para o log, sem segurar a resposta.
+    if (!skip && res.status >= 500) {
+      res.clone().json().catch(() => ({}))
+        .then((body) => fetchMonitor.onProblem?.({ kind: "http", status: res.status, url, code: body?.code, detail: body?.message }));
+    }
     return res;
   } catch (err) {
     if (!skip && err?.name !== "AbortError") fetchMonitor.onProblem?.({ kind: "network", message: err?.message, url });

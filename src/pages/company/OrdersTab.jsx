@@ -952,7 +952,7 @@ export function OrdersTab() {
       .on("postgres_changes", { event: "*", schema: "public", table: "courier_shifts", filter: `company_id=eq.${companyId}` }, schedule)
       .subscribe();
     // Rede de segurança do despacho automático (o banco também despacha sozinho).
-    const interval = setInterval(() => { supabase.rpc("auto_dispatch_tick").then(load); }, 30000);
+    const interval = setInterval(() => { if (!document.hidden) supabase.rpc("auto_dispatch_tick").then(load); }, 30000);
     return () => { clearTimeout(reloadTimer.current); clearInterval(interval); supabase.removeChannel(channel); };
   }, [companyId, load]);
 

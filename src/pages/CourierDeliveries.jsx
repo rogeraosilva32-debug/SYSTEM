@@ -276,7 +276,7 @@ export default function CourierDeliveries() {
       .on("postgres_changes", { event: "*", schema: "public", table: "courier_shifts", filter: `courier_id=eq.${profile.id}` }, () => load())
       .subscribe();
     // Rede de segurança do despacho automático (o banco também despacha sozinho).
-    const interval = setInterval(() => { supabase.rpc("auto_dispatch_tick").then(() => load()); }, 30000);
+    const interval = setInterval(() => { if (!document.hidden) supabase.rpc("auto_dispatch_tick").then(() => load()); }, 30000);
     return () => { clearInterval(interval); supabase.removeChannel(channel); };
   }, [profile.id, load]);
 
