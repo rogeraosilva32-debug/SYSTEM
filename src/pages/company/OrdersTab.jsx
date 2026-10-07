@@ -198,7 +198,6 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [found, setFound] = useState("");
-  const [addressOk, setAddressOk] = useState(false);
   const [step, setStep] = useState("client");
   const [checking, setChecking] = useState(false);
   const narrow = useMediaQuery("(max-width:600px)");
@@ -221,7 +220,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
     setStep("client");
     setOrderType("delivery"); setPhone(""); setName(""); setCustomerId(null); setAddress(EMPTY_ADDRESS); setComplement("");
     setSource("telefone"); setCart([]); setFee(""); setPayment("dinheiro");
-    setChangeFor(""); setNotes(""); setSaveCustomer(true); setError(""); setFound(""); setAddressOk(false);
+    setChangeFor(""); setNotes(""); setSaveCustomer(true); setError(""); setFound("");
   };
 
   // Taxa sugerida pelo bairro (o banco aplica a mesma regra se ficar vazio).
@@ -258,7 +257,6 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
         lat: data.lat, lng: data.lng, precision: data.lat ? "number" : null,
       });
       setFound("Cliente encontrado: endereço preenchido. Confirme com ele na próxima etapa.");
-      setAddressOk(false);
     } else {
       setCustomerId(null); setFound("");
     }
@@ -280,7 +278,6 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
   const stepError = (key) => {
     if (key === "client" && !local && !name.trim()) return "Informe o nome do cliente.";
     if (key === "address" && !address.street && !address.neighborhood && !address.lat) return "Digite o endereço, busque ou marque o ponto no mapa.";
-    if (key === "address" && !addressOk) return "Confirme o endereço com o cliente e marque a caixa abaixo.";
     if (key === "items" && cart.length === 0) return "Adicione ao menos um produto do cardápio.";
     return "";
   };
@@ -310,7 +307,6 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
     setError("");
     if (!local && !name.trim()) { setStep("client"); setError("Informe o nome do cliente."); return; }
     if (cart.length === 0) { setStep("items"); setError("Adicione ao menos um produto do cardápio."); return; }
-    if (!local && !addressOk) { setStep("address"); setError("Confirme o endereço com o cliente e marque a caixa abaixo."); return; }
     if (feeInvalid) { setError("Taxa de entrega inválida. Use só números, ex.: 5,00."); return; }
     if (changeInvalid) { setError("Valor do troco inválido. Use só números, ex.: 50,00."); return; }
     setSaving(true);
@@ -441,9 +437,6 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
             <DeliveryAddressField value={address} onChange={setAddress} store={store} />
             <TextField label="Complemento / referência" value={complement} onChange={(e) => setComplement(e.target.value)}
               placeholder="Ex.: apto 12, casa dos fundos, perto da padaria" />
-            <FormControlLabel
-              control={<Checkbox checked={addressOk} onChange={(e) => { setAddressOk(e.target.checked); setError(""); }} />}
-              label={<Typography sx={{ fontSize: 14, fontWeight: 700 }}>Confirmei o endereço com o cliente</Typography>} />
           </>
         )}
 

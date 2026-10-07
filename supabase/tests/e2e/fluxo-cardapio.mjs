@@ -18,10 +18,7 @@ const expand = async (p, title) => {
   await p.waitForTimeout(300);
 };
 const errors = [];
-// Na etapa do endereço é preciso marcar que o endereço foi confirmado com o cliente.
 const cont = async (p) => {
-  const ok = p.getByLabel('Confirmei o endereço com o cliente');
-  if (await ok.isVisible() && !(await ok.isChecked())) await ok.check();
   await p.getByRole('button', { name: 'Continuar' }).click();
 };
 const check = (label, ok) => { console.log(ok ? '✓' : '✗', label); if (!ok) errors.push(`falhou: ${label}`); };

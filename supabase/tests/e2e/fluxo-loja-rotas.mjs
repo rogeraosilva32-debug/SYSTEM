@@ -9,10 +9,7 @@ const APP = 'http://localhost:4173';
 const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q.replace(/"/g, '\\"')}"`).toString().trim();
 const log = (...a) => console.log('•', ...a);
 const errors = [];
-// Na etapa do endereço é preciso marcar que o endereço foi confirmado com o cliente.
 const cont = async (p) => {
-  const ok = p.getByLabel('Confirmei o endereço com o cliente');
-  if (await ok.isVisible() && !(await ok.isChecked())) await ok.check();
   await p.getByRole('button', { name: 'Continuar' }).click();
 };
 const nominatimCalls = [];
