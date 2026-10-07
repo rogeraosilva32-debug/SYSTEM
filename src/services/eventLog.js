@@ -174,14 +174,24 @@ export function startEventLog() {
     });
   }
 
+  // Celular com a tela apagada ou o app em segundo plano corta a rede das
+  // abas: a chamada falha sem o servidor ter culpa. Não conta isso, nem nos
+  // primeiros segundos depois que a tela volta.
+  let shownAt = Date.now();
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) shownAt = Date.now(); });
+
   fetchMonitor.onProblem = (p) => {
     if (p.kind === "network" && navigator.onLine === false) return; // já contado como queda de internet
-    const message = p.kind === "http"
+    if (p.kind === "network" && (document.hidden || Date.now() - shownAt < 10000)) return;
+    // O serviço vai na mensagem para dar para ver na lista qual chamada falhou.
+    const servico = (p.url || "").replace(/^https?:\/\/[^/]+/, "").split("?")[0].replace(/^\/rest\/v1\//, "").slice(0, 120);
+    const motivo = p.code ? ` (${p.code}${p.detail ? `: ${String(p.detail).slice(0, 160)}` : ""})` : "";
+    const message = (p.kind === "http"
       ? `Servidor respondeu com erro ${p.status}`
-      : "Servidor não respondeu (o aparelho tinha internet)";
+      : "Servidor não respondeu (o aparelho tinha internet)") + (servico ? ` em ${servico}` : "") + motivo;
     logEvent("rede", p.kind === "http" ? "server_error" : "server_unreachable", message, "warning",
-      { status: p.status, servico: (p.url || "").replace(/^https?:\/\/[^/]+/, "").split("?")[0].slice(0, 120) },
-      { key: `srv:${p.kind}:${p.status || ""}`, everyMs: 120000 });
+      { status: p.status, servico, codigo: p.code, erro: p.detail },
+      { key: `srv:${p.kind}:${p.status || ""}:${servico}`, everyMs: 120000 });
   };
 
   window.addEventListener("error", (e) => {

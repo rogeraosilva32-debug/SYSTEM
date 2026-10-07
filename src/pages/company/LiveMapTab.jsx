@@ -48,6 +48,7 @@ export function LiveMapTab() {
   const { companyId } = useAuth();
   const [couriers, setCouriers] = useState(null);
   const [runs, setRuns] = useState([]);
+  const [returning, setReturning] = useState([]);
   const [trails, setTrails] = useState({});
   const [plans, setPlans] = useState({});
   const settings = useCompanySettings();
@@ -55,14 +56,16 @@ export function LiveMapTab() {
   const timer = useRef(null);
 
   const load = useCallback(async () => {
-    const [c, r] = await Promise.all([
+    const [c, r, back] = await Promise.all([
       supabase.from("profiles").select("id, name, last_lat, last_lng, last_location_at")
         .eq("company_id", companyId).eq("company_role", "collaborator"),
       supabase.from("delivery_runs").select("id, courier_id, status, started_at, orders:delivery_orders(id, number, customer_name, address_street, address_number, address_neighborhood, lat, lng, status, stop_sequence)")
         .eq("company_id", companyId).eq("status", "in_progress"),
+      supabase.rpc("returning_runs"),
     ]);
     setCouriers(c.data || []);
     setRuns(r.data || []);
+    setReturning(back.error ? [] : back.data || []);
     const ids = (r.data || []).map((x) => x.id);
     if (ids.length) {
       // Mais recentes primeiro (o servidor limita a quantidade de linhas):
@@ -148,11 +151,12 @@ export function LiveMapTab() {
         {couriers.map((c) => {
           const run = runs.find((r) => r.courier_id === c.id);
           const pending = (run?.orders || []).filter((o) => o.status === "on_route").length;
+          const back = !run && returning.some((r) => r.courier_id === c.id);
           return (
             <Box key={c.id} sx={{ p: 1.2, mb: 1, border: "1px solid #E7E5E4", borderRadius: "12px", background: "#fff" }}>
               <Typography sx={{ fontWeight: 700, fontSize: 13.5 }}>{c.name}</Typography>
-              <Typography sx={{ fontSize: 12, color: run ? "#4F5BA6" : "#A8A29E", fontWeight: 600 }}>
-                {run ? `Em rota · ${pending} parada(s) restante(s)` : "Livre"} · {timeAgo(c.last_location_at)}
+              <Typography sx={{ fontSize: 12, color: run ? "#4F5BA6" : back ? "#7A5512" : "#A8A29E", fontWeight: 600 }}>
+                {run ? `Em rota · ${pending} parada(s) restante(s)` : back ? "Voltando para a loja" : "Livre"} · {timeAgo(c.last_location_at)}
               </Typography>
             </Box>
           );

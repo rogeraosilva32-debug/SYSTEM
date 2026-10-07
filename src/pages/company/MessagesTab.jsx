@@ -152,8 +152,7 @@ export function MessagesTab() {
       {showList && (
         <Box sx={{ width: { xs: "100%", sm: 280 }, flexShrink: 0, border: "1px solid #E7E5E4", borderRadius: "14px", overflow: "hidden", background: "#fff", alignSelf: "flex-start" }}>
           <Box sx={{ p: 1.2, borderBottom: "1px solid #F5F5F4", display: "flex", flexDirection: "column", gap: 1 }}>
-            <TextField size="small" placeholder="Buscar pessoa" value={search} onChange={(e) => setSearch(e.target.value)}
-              InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 18 }} /></InputAdornment> }} />
+            <TextField size="small" placeholder="Buscar pessoa" value={search} onChange={(e) => setSearch(e.target.value)} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 18 }} /></InputAdornment> } }} />
             <Button size="small" variant="outlined" startIcon={<CampaignOutlinedIcon />} onClick={() => setBroadcast(true)} sx={{ textTransform: "none", fontWeight: 700 }}>
               Aviso para todos
             </Button>

@@ -140,7 +140,7 @@ export function InvoicesTab() {
           Cria uma fatura para cada empresa ativa com mensalidade, vencendo no dia de cobrança dela. A mensalidade e o dia ficam na página de cada empresa.
         </Typography>
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
-          <TextField size="small" type="month" label="Mês" value={month} onChange={(e) => setMonth(e.target.value)} InputLabelProps={{ shrink: true }} />
+          <TextField size="small" type="month" label="Mês" value={month} onChange={(e) => setMonth(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
           <Button variant="contained" onClick={generate} disabled={!month}>Gerar faturas do mês</Button>
           <Button variant="outlined" color="error" onClick={suspend}>Suspender inadimplentes</Button>
         </Box>
@@ -212,10 +212,10 @@ export function CompanyBilling({ company, onUpdated }) {
       {msg && <Alert severity={msg.type} sx={{ mb: 1.5 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr auto" }, gap: 1 }}>
         <TextField size="small" label="Mensalidade (R$)" value={form.monthly_price} onChange={(e) => setForm({ ...form, monthly_price: e.target.value })} />
-        <TextField size="small" type="number" label="Dia de vencimento (1–28)" value={form.billing_day} inputProps={{ min: 1, max: 28 }}
-          onChange={(e) => setForm({ ...form, billing_day: e.target.value })} />
-        <TextField size="small" type="number" label="Carência (dias)" value={form.grace_days} inputProps={{ min: 0, max: 60 }}
-          onChange={(e) => setForm({ ...form, grace_days: e.target.value })} />
+        <TextField size="small" type="number" label="Dia de vencimento (1–28)" value={form.billing_day}
+          onChange={(e) => setForm({ ...form, billing_day: e.target.value })} slotProps={{ htmlInput: { min: 1, max: 28 } }} />
+        <TextField size="small" type="number" label="Carência (dias)" value={form.grace_days}
+          onChange={(e) => setForm({ ...form, grace_days: e.target.value })} slotProps={{ htmlInput: { min: 0, max: 60 } }} />
         <Button variant="outlined" onClick={save}>Salvar</Button>
       </Box>
       <CompanyInvoices companyId={company.id} />

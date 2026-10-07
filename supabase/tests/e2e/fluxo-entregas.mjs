@@ -6,13 +6,19 @@ const sql = (q) => execSync(`sudo -u postgres psql -X -At -d sistema_e2e -c "${q
 const APP = 'http://localhost:4173';
 const log = (...a) => console.log('•', ...a);
 const errors = [];
+const check = (label, ok) => { console.log(ok ? '✓' : '✗', label); if (!ok) errors.push(`falhou: ${label}`); };
 const expand = async (p, title) => {
   const h = p.locator('[role=button][aria-expanded]').filter({ hasText: new RegExp('^' + title) }).first();
   await h.waitFor();
   if ((await h.getAttribute('aria-expanded')) === 'false') await h.click();
   await p.waitForTimeout(300);
 };
-const cont = (p) => p.getByRole('button', { name: 'Continuar' }).click();
+// Na etapa do endereço é preciso marcar que o endereço foi confirmado com o cliente.
+const cont = async (p) => {
+  const ok = p.getByLabel('Confirmei o endereço com o cliente');
+  if (await ok.isVisible() && !(await ok.isChecked())) await ok.check();
+  await p.getByRole('button', { name: 'Continuar' }).click();
+};
 
 async function mockExternal(ctx) {
   await ctx.addInitScript(() => { window.open = (u) => { window.__opened = u; return null; }; });
@@ -61,6 +67,9 @@ await admin.getByLabel('Rua').fill('Avenida Paulista');
 await admin.getByLabel('Número').fill('1000');
 await admin.getByLabel('Bairro').fill('Bela Vista');
 await admin.getByLabel('Cidade').fill('São Paulo');
+check('aviso para confirmar o endereço', await admin.getByText(/Confirme o endereço com o cliente/).first().isVisible());
+await admin.getByRole('button', { name: 'Continuar' }).click();
+check('sem confirmar o endereço não avança', await admin.getByText('Confirme o endereço com o cliente e marque a caixa abaixo.').isVisible());
 await cont(admin);
 await admin.getByLabel('Adicionar produto do cardápio').fill('Misto');
 await admin.getByRole('option', { name: /Misto quente/ }).click();
@@ -138,13 +147,26 @@ await courier.screenshot({ path: `${SHOTS}/08-motoboy-parada2.png`, fullPage: tr
 await courierCtx.setGeolocation({ latitude: -23.60, longitude: -46.70 });
 await courier.waitForTimeout(2500);
 const offVisible = await courier.getByText(/Você saiu do trajeto/).isVisible().catch(() => false);
-log('alerta de desvio na tela:', offVisible, '| aviso para o admin:', sql(`select count(*) from notifications where type='off_route'`));
+check('sem rota exata: desvio não acusa na tela', !offVisible);
+check('sem rota exata: gestor não é avisado', sql(`select count(*) from notifications where type='off_route'`) === '0');
 log('posições gravadas:', sql(`select count(*) from location_pings`));
+
+// última entrega: motoboy volta para a loja
+const right2 = sql(`select c.code from order_delivery_codes c join delivery_orders o on o.id=c.order_id where o.status='on_route' limit 1`);
+await courier.getByLabel(/Código de entrega/).fill(right2);
+await courier.getByRole('button', { name: 'Finalizar entrega' }).click();
+await courier.getByRole('button', { name: 'Cheguei na loja' }).waitFor({ timeout: 10000 });
+check('depois da última entrega aparece a volta para a loja', true);
+await courier.screenshot({ path: `${SHOTS}/08b-motoboy-voltando.png`, fullPage: true });
 
 // ───────── Admin: mapa ao vivo e ajustes ─────────
 await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Mapa ao vivo', exact: true }).click();
 await admin.getByText('MOTOBOYS').waitFor();
 await admin.waitForTimeout(800);
+check('gestor vê o motoboy voltando para a loja', await admin.getByText(/Voltando para a loja/).first().isVisible());
+await courier.getByRole('button', { name: 'Cheguei na loja' }).click();
+await courier.getByText('Chegada na loja registrada.').waitFor();
+check('chegada registrada', sql(`select count(*) from delivery_runs where returned_by='courier'`) === '1');
 await admin.screenshot({ path: `${SHOTS}/09-mapa-ao-vivo.png` });
 await admin.getByRole('navigation', { name: 'Menu' }).getByRole('button', { name: 'Ajustes de entrega', exact: true }).click();
 await expand(admin, 'Rotas');
@@ -153,6 +175,13 @@ await admin.locator('input[type=checkbox]').first().click();
 await admin.waitForTimeout(600);
 log('rota exata ligada pelo admin:', sql(`select strict_route_mode from companies where name='Empresa A'`));
 await admin.screenshot({ path: `${SHOTS}/10-ajustes.png`, fullPage: true });
+await expand(admin, 'Expediente parado');
+await admin.getByLabel('Limite sem atividade (min)').fill('60');
+await admin.getByRole('button', { name: 'Salvar limite' }).click();
+await admin.waitForTimeout(600);
+check('limite de expediente salvo', sql(`select shift_idle_minutes from companies where name='Empresa A'`) === '60');
+await admin.screenshot({ path: `${SHOTS}/10b-expediente-parado.png`, fullPage: true });
+sql(`update companies set shift_idle_minutes = 0 where name='Empresa A'`);
 
 console.log('\nERROS NO NAVEGADOR:', errors.length ? errors : 'nenhum');
 await browser.close();

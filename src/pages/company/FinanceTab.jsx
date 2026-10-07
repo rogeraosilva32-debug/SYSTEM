@@ -97,7 +97,7 @@ function CashDay({ companyId }) {
   return (
     <Box>
       <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 2, flexWrap: "wrap" }}>
-        <TextField size="small" type="date" label="Dia" value={day} onChange={(e) => e.target.value && setDay(e.target.value)} InputLabelProps={{ shrink: true }} />
+        <TextField size="small" type="date" label="Dia" value={day} onChange={(e) => e.target.value && setDay(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
         {!isToday && <Button size="small" onClick={() => setDay(today())}>Hoje</Button>}
       </Box>
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
@@ -277,10 +277,10 @@ function Settlements({ companyId }) {
           <TextField select size="small" label="Motoboy" value={courier} onChange={(e) => { setCourier(e.target.value); setPreview(null); }}>
             {couriers.map((c) => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
           </TextField>
-          <TextField size="small" type="date" label="De" value={range[0]} InputLabelProps={{ shrink: true }}
-            onChange={(e) => { setRange([e.target.value, range[1]]); setPreview(null); }} />
-          <TextField size="small" type="date" label="Até" value={range[1]} InputLabelProps={{ shrink: true }}
-            onChange={(e) => { setRange([range[0], e.target.value]); setPreview(null); }} />
+          <TextField size="small" type="date" label="De" value={range[0]}
+            onChange={(e) => { setRange([e.target.value, range[1]]); setPreview(null); }} slotProps={{ inputLabel: { shrink: true } }} />
+          <TextField size="small" type="date" label="Até" value={range[1]}
+            onChange={(e) => { setRange([range[0], e.target.value]); setPreview(null); }} slotProps={{ inputLabel: { shrink: true } }} />
           <Button variant="outlined" onClick={doPreview}>Calcular</Button>
         </Box>
         {preview && (
@@ -438,12 +438,12 @@ function Rates({ companyId }) {
               {[["daily_rate", "Diária"], ["per_delivery", "Por entrega"], ["per_km", "Por km"]].map(([k, label]) => (
                 <TextField key={k} size="small" label={label} defaultValue={field(r[k])}
                   placeholder={money(company[{ daily_rate: "courier_daily_rate", per_delivery: "courier_per_delivery", per_km: "courier_per_km" }[k]])}
-                  InputLabelProps={{ shrink: true }}
+                 
                   onBlur={(e) => {
                     if (isInvalid(e.target.value)) { setMsg({ type: "error", text: `${label} de ${c.name}: valor inválido, não foi salvo.` }); return; }
                     const v = parseOrNull(e.target.value);
                     if (v !== (r[k] == null ? null : Number(r[k]))) saveCourier(c.id, { [k]: v });
-                  }} />
+                  }} slotProps={{ inputLabel: { shrink: true } }} />
               ))}
             </Box>
           );

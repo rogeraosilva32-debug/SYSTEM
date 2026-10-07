@@ -35,6 +35,9 @@ self.addEventListener("push", (event) => {
       body: data.message,
       icon: "/icon-192.png",
       badge: "/icon-192.png",
+      // Mesma tag da notificação mostrada pelo app aberto: não duplica.
+      tag: data.tag || undefined,
+      vibrate: [200, 100, 200],
       data: { url: data.url || "/" },
     })
   );

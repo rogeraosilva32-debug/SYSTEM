@@ -20,6 +20,7 @@ import TwoWheelerIcon from "@mui/icons-material/TwoWheeler";
 import WhatsAppIcon from "@mui/icons-material/WhatsApp";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import DeliveryAddressField from "../../components/DeliveryAddressField";
+import MotoboyIcon from "../../components/MotoboyIcon";
 import { useCompanySettings } from "../../hooks/useCompanySettings";
 import { locateAddress } from "../../utils/geocoding";
 import InfoField from "../../components/InfoField";
@@ -197,6 +198,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [found, setFound] = useState("");
+  const [addressOk, setAddressOk] = useState(false);
   const [step, setStep] = useState("client");
   const [checking, setChecking] = useState(false);
   const narrow = useMediaQuery("(max-width:600px)");
@@ -219,7 +221,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
     setStep("client");
     setOrderType("delivery"); setPhone(""); setName(""); setCustomerId(null); setAddress(EMPTY_ADDRESS); setComplement("");
     setSource("telefone"); setCart([]); setFee(""); setPayment("dinheiro");
-    setChangeFor(""); setNotes(""); setSaveCustomer(true); setError(""); setFound("");
+    setChangeFor(""); setNotes(""); setSaveCustomer(true); setError(""); setFound(""); setAddressOk(false);
   };
 
   // Taxa sugerida pelo bairro (o banco aplica a mesma regra se ficar vazio).
@@ -255,7 +257,8 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
         neighborhood: data.address_neighborhood || "", city: data.address_city || "",
         lat: data.lat, lng: data.lng, precision: data.lat ? "number" : null,
       });
-      setFound("Cliente encontrado: endereço preenchido.");
+      setFound("Cliente encontrado: endereço preenchido. Confirme com ele na próxima etapa.");
+      setAddressOk(false);
     } else {
       setCustomerId(null); setFound("");
     }
@@ -277,6 +280,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
   const stepError = (key) => {
     if (key === "client" && !local && !name.trim()) return "Informe o nome do cliente.";
     if (key === "address" && !address.street && !address.neighborhood && !address.lat) return "Digite o endereço, busque ou marque o ponto no mapa.";
+    if (key === "address" && !addressOk) return "Confirme o endereço com o cliente e marque a caixa abaixo.";
     if (key === "items" && cart.length === 0) return "Adicione ao menos um produto do cardápio.";
     return "";
   };
@@ -306,6 +310,7 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
     setError("");
     if (!local && !name.trim()) { setStep("client"); setError("Informe o nome do cliente."); return; }
     if (cart.length === 0) { setStep("items"); setError("Adicione ao menos um produto do cardápio."); return; }
+    if (!local && !addressOk) { setStep("address"); setError("Confirme o endereço com o cliente e marque a caixa abaixo."); return; }
     if (feeInvalid) { setError("Taxa de entrega inválida. Use só números, ex.: 5,00."); return; }
     if (changeInvalid) { setError("Valor do troco inválido. Use só números, ex.: 50,00."); return; }
     setSaving(true);
@@ -428,9 +433,17 @@ function NewOrderDialog({ open, onClose, onCreated, companyId, zones, menu, hasC
             {!store && (
               <Alert severity="info" sx={{ py: 0 }}>Cadastre o endereço da loja em "Entregas: ajustes" para as buscas priorizarem a sua cidade e as rotas saírem da loja.</Alert>
             )}
+            <Alert severity="warning" sx={{ py: 0.3 }}>
+              {customerId
+                ? "Endereço salvo do cliente: confirme com ele se ainda é este (rua, número e referência) antes de seguir."
+                : "Confirme o endereço com o cliente (rua, número e referência) antes de seguir."}
+            </Alert>
             <DeliveryAddressField value={address} onChange={setAddress} store={store} />
             <TextField label="Complemento / referência" value={complement} onChange={(e) => setComplement(e.target.value)}
               placeholder="Ex.: apto 12, casa dos fundos, perto da padaria" />
+            <FormControlLabel
+              control={<Checkbox checked={addressOk} onChange={(e) => { setAddressOk(e.target.checked); setError(""); }} />}
+              label={<Typography sx={{ fontSize: 14, fontWeight: 700 }}>Confirmei o endereço com o cliente</Typography>} />
           </>
         )}
 
@@ -626,7 +639,8 @@ function OrderDetailDialog({ order, company, onClose, onChanged }) {
         {!local && order.lat && order.lng && (
           <RouteMap lat={order.lat} lng={order.lng} address={orderAddress(order)}
             origin={company?.store_lat ? { lat: company.store_lat, lng: company.store_lng } : null}
-            trackCollaboratorId={onRoute ? order.courier_id : null} mapHeight={220} />
+            trackCollaboratorId={onRoute ? order.courier_id : null} mapHeight={220}
+            checkOffRoute={Boolean(company?.strict_route_mode)} />
         )}
 
         {error && <Alert severity="error">{error}</Alert>}
@@ -815,7 +829,7 @@ function RunDialog({ open, onClose, onDone, couriers, available, run, courierFee
 }
 
 // ───────────────────────── Motoboys em expediente ─────────────────────────
-function ShiftPanel({ shifts, couriers, runs, onChanged }) {
+function ShiftPanel({ shifts, couriers, runs, returning = [], onChanged }) {
   const [error, setError] = useState("");
   if (!shifts.length) return null;
   const act = async (fn) => {
@@ -832,14 +846,20 @@ function ShiftPanel({ shifts, couriers, runs, onChanged }) {
         {shifts.map((sh) => {
           const name = couriers.find((c) => c.id === sh.courier_id)?.name || "Motoboy";
           const run = runs.find((r) => r.courier_id === sh.courier_id);
-          const state = sh.paused ? "Em pausa" : run ? (run.status === "planned" ? "Saída aguardando" : "Em rota") : "Livre";
-          const color = sh.paused ? "#B0793D" : run ? "#4F5BA6" : "#4B7A5E";
+          const back = !run && returning.find((r) => r.courier_id === sh.courier_id);
+          const state = sh.paused ? "Em pausa" : run ? (run.status === "planned" ? "Saída aguardando" : "Em rota") : back ? "Voltando para a loja" : "Livre";
+          const color = sh.paused ? "#B0793D" : run ? "#4F5BA6" : back ? "#7A5512" : "#4B7A5E";
           return (
             <Box key={sh.id} sx={{ display: "flex", alignItems: "center", gap: 1, px: 1.2, py: 0.6, border: "1px solid #E7E5E4", borderRadius: "10px", background: "#fff" }}>
               <Box>
                 <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{name}</Typography>
                 <Typography sx={{ fontSize: 11, fontWeight: 700, color }}>{state}{sh.paused && sh.paused_reason ? ` · ${sh.paused_reason}` : ""}</Typography>
               </Box>
+              {back && (
+                <Button size="small" onClick={() => act(() => supabase.rpc("mark_back_at_store", { p_run: back.run_id, p_by: "manager" }))}>
+                  Chegou
+                </Button>
+              )}
               <Button size="small" onClick={() => act(() => supabase.rpc("set_shift_paused", { p_paused: !sh.paused, p_courier: sh.courier_id }))}>
                 {sh.paused ? "Liberar" : "Pausar"}
               </Button>
@@ -866,6 +886,7 @@ export function OrdersTab() {
   const [menu, setMenu] = useState({ items: [], addons: [] });
   const [courierFees, setCourierFees] = useState({});
   const [shifts, setShifts] = useState([]);
+  const [returning, setReturning] = useState([]);
   const [deliveredToday, setDeliveredToday] = useState(0);
   const [selected, setSelected] = useState(new Set());
   const [showNew, setShowNew] = useState(false);
@@ -875,7 +896,7 @@ export function OrdersTab() {
 
   const load = useCallback(async () => {
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-    const [o, r, z, c, comp, d, cats, prods, fees, sh, ad] = await Promise.all([
+    const [o, r, z, c, comp, d, cats, prods, fees, sh, ad, back] = await Promise.all([
       supabase.from("delivery_orders").select("*, courier:courier_id(name)").eq("company_id", companyId)
         .in("status", COLUMNS).order("created_at"),
       supabase.from("delivery_runs").select("*, courier:courier_id(name)").eq("company_id", companyId)
@@ -890,9 +911,11 @@ export function OrdersTab() {
       supabase.rpc("my_courier_fees"),
       supabase.from("courier_shifts").select("id, courier_id, started_at, paused, paused_reason").eq("company_id", companyId).is("ended_at", null).order("started_at"),
       supabase.from("companies").select("auto_dispatch").eq("id", companyId).maybeSingle(),
+      supabase.rpc("returning_runs"),
     ]);
     setAutoDispatch(ad.data?.auto_dispatch === true);
     setShifts(sh.data || []);
+    setReturning(back.error ? [] : back.data || []);
     // Cardápio do pedido: só produtos ativos de categorias visíveis, na ordem das categorias.
     const catList = (cats.data || []).slice().sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
     const catIndex = new Map(catList.map((cat, i) => [cat.id, i]));
@@ -929,7 +952,7 @@ export function OrdersTab() {
       .on("postgres_changes", { event: "*", schema: "public", table: "courier_shifts", filter: `company_id=eq.${companyId}` }, schedule)
       .subscribe();
     // Rede de segurança do despacho automático (o banco também despacha sozinho).
-    const interval = setInterval(() => { supabase.rpc("auto_dispatch_tick").then(load); }, 30000);
+    const interval = setInterval(() => { if (!document.hidden) supabase.rpc("auto_dispatch_tick").then(load); }, 30000);
     return () => { clearTimeout(reloadTimer.current); clearInterval(interval); supabase.removeChannel(channel); };
   }, [companyId, load]);
 
@@ -982,7 +1005,7 @@ export function OrdersTab() {
             : "Despacho automático ligado, mas nenhum motoboy está em expediente. Os pedidos esperam até alguém tocar em “Iniciar expediente” no app."}
         </Alert>
       )}
-      <ShiftPanel shifts={shifts} couriers={couriers} runs={runs} onChanged={load} />
+      <ShiftPanel shifts={shifts} couriers={couriers} runs={runs} returning={returning} onChanged={load} />
       {zones.length === 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>Cadastre os bairros atendidos e as taxas na aba “Entregas: ajustes” para a taxa ser preenchida sozinha.</Alert>
       )}
@@ -1012,7 +1035,7 @@ export function OrdersTab() {
               </Typography>
               {o.run_id && col !== "ready" && (
                 <Typography sx={{ fontSize: 11, color: "#4F5BA6", fontWeight: 700, flexShrink: 0, maxWidth: "50%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  🛵 {o.courier?.name}
+                  <MotoboyIcon /> {o.courier?.name}
                 </Typography>
               )}
               {o.run_id && col === "ready" && (
@@ -1050,7 +1073,7 @@ export function OrdersTab() {
                   {col !== "ready" && list.map((o) => card(o, col))}
                   {col === "ready" && blocks.map((b) => b.order ? card(b.order, col, b.pos) : (
                     <Box key={b.run} sx={{ border: "1px dashed #C9CDEB", background: "#EEF0FA", borderRadius: "12px", p: 0.8, pb: 0.1, mb: 1 }}>
-                      <Typography sx={{ fontSize: 11.5, fontWeight: 800, color: "#4F5BA6", px: 0.4, mb: 0.2 }}>🛵 {b.courier || "Motoboy"}</Typography>
+                      <Typography sx={{ fontSize: 11.5, fontWeight: 800, color: "#4F5BA6", px: 0.4, mb: 0.2 }}><MotoboyIcon /> {b.courier || "Motoboy"}</Typography>
                       <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.4, mb: 0.6 }}>
                         <Typography sx={{ fontSize: 10.5, color: "#6B72A8", flex: 1 }}>Aguardando o motoboy confirmar a saída</Typography>
                         <Button size="small" sx={{ minWidth: 0, py: 0, fontSize: 11 }}
@@ -1075,7 +1098,7 @@ export function OrdersTab() {
         {runsWithOrders.map((r) => (
           <Box key={r.id} sx={{ p: 2, border: "1px solid #E7E5E4", borderRadius: "14px", background: "#fff" }}>
             <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
-              <Typography sx={{ fontWeight: 800 }}>🛵 {r.courier?.name}</Typography>
+              <Typography sx={{ fontWeight: 800 }}><MotoboyIcon /> {r.courier?.name}</Typography>
               <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
                 {r.auto && <Chip size="small" label="Automática" sx={{ height: 20, fontSize: 10.5, fontWeight: 700 }} />}
                 {r.strict_route && <Chip size="small" label="Rota exata" sx={{ height: 20, fontSize: 10.5, fontWeight: 700 }} />}

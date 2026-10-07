@@ -74,6 +74,11 @@ check('empresa entra no plano com vagas, mensalidade e recurso',
 // ───────── Avisos ─────────
 await nav('Avisos');
 await page.getByRole('button', { name: 'Novo aviso' }).click();
+// Campo de data: o nome do campo fica em cima (não por cima do dd/mm/aaaa).
+await page.locator('label', { hasText: 'Mostrar a partir de' }).waitFor();
+check('rótulo da data fica acima do campo',
+  await page.locator('label', { hasText: 'Mostrar a partir de' }).getAttribute('data-shrink') === 'true');
+await page.screenshot({ path: `${SHOTS}/74-novo-aviso.png` });
 await page.getByLabel('Título').fill('Manutenção hoje às 23h');
 await page.getByLabel('Mensagem').fill('O sistema fica fora por 10 minutos.');
 await page.getByRole('button', { name: 'Publicar aviso' }).click();

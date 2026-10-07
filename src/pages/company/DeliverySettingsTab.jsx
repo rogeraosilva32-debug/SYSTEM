@@ -86,8 +86,8 @@ function AutoDispatch({ company, onSave }) {
       </Box>
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5, mt: 2 }}>
         <TextField size="small" type="number" label="Máximo de entregas por saída" value={form.auto_max_stops}
-          onChange={set("auto_max_stops")} inputProps={{ min: 1, max: 20 }}
-          helperText="A saída junta os pedidos prontos até este número, na melhor rota." />
+          onChange={set("auto_max_stops")}
+          helperText="A saída junta os pedidos prontos até este número, na melhor rota." slotProps={{ htmlInput: { min: 1, max: 20 } }} />
       </Box>
       <MoreOptions>
         <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5 }}>
@@ -100,15 +100,53 @@ function AutoDispatch({ company, onSave }) {
             <MenuItem value="any">Assim que chegam (sem esperar ficar pronto)</MenuItem>
           </TextField>
           <TextField size="small" type="number" label="Esperar para juntar pedidos (min)" value={form.auto_hold_minutes}
-            onChange={set("auto_hold_minutes")} inputProps={{ min: 0, max: 30 }}
-            helperText="0 = sai assim que houver motoboy livre." />
+            onChange={set("auto_hold_minutes")}
+            helperText="0 = sai assim que houver motoboy livre." slotProps={{ htmlInput: { min: 0, max: 30 } }} />
           <TextField size="small" type="number" label="Prazo para o motoboy iniciar a saída (min)" value={form.auto_accept_minutes}
-            onChange={set("auto_accept_minutes")} inputProps={{ min: 0, max: 60 }}
-            helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." />
+            onChange={set("auto_accept_minutes")}
+            helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." slotProps={{ htmlInput: { min: 0, max: 60 } }} />
         </Box>
       </MoreOptions>
       {invalid && <Alert severity="error" sx={{ mt: 1.5 }}>{invalid}</Alert>}
       <Button variant="outlined" sx={{ mt: 1.5 }} onClick={save}>Salvar limites</Button>
+    </>
+  );
+}
+
+// Limite de expediente parado: motoboy sem nenhuma ação (e longe da loja)
+// é pausado ou tem o expediente encerrado; o gestor é avisado.
+function ShiftIdle({ company, onSave }) {
+  const [minutes, setMinutes] = useState(company.shift_idle_minutes ?? 0);
+  const [invalid, setInvalid] = useState("");
+  if (company.shift_idle_minutes === undefined) {
+    return <Alert severity="warning">Rode de novo o supabase-b2b-schema.sql no Supabase para liberar o limite de expediente.</Alert>;
+  }
+  const save = () => {
+    const n = String(minutes).trim() === "" ? NaN : Number(minutes);
+    if (!Number.isInteger(n) || n < 0 || n > 720) { setInvalid("Limite: de 0 a 720 minutos (0 = desligado)."); return; }
+    setInvalid("");
+    onSave({ shift_idle_minutes: n });
+  };
+  return (
+    <>
+      <Typography sx={{ fontSize: 12.5, color: "#78716C", maxWidth: 560, mb: 2 }}>
+        Conta como ação iniciar ou terminar uma saída, finalizar uma entrega, chegar na loja e voltar da pausa.
+        Quem está esperando na loja (com o GPS ligado) não é considerado parado. Se o motoboy passar do limite sem
+        nenhuma ação, por exemplo sem voltar para pegar novas entregas, o sistema age e avisa o gestor. Durante uma
+        saída em andamento o gestor só recebe o aviso.
+      </Typography>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5 }}>
+        <TextField size="small" type="number" label="Limite sem atividade (min)" value={minutes}
+          onChange={(e) => setMinutes(e.target.value)}
+          helperText="0 = desligado. Ex.: 60 para uma hora." slotProps={{ htmlInput: { min: 0, max: 720 } }} />
+        <TextField select size="small" label="Ao passar do limite" value={company.shift_idle_action || "pause"}
+          onChange={(e) => onSave({ shift_idle_action: e.target.value })} helperText=" ">
+          <MenuItem value="pause">Pausar (para de receber entregas)</MenuItem>
+          <MenuItem value="end">Encerrar o expediente</MenuItem>
+        </TextField>
+      </Box>
+      {invalid && <Alert severity="error" sx={{ mt: 1.5 }}>{invalid}</Alert>}
+      <Button variant="outlined" sx={{ mt: 1.5 }} onClick={save}>Salvar limite</Button>
     </>
   );
 }
@@ -148,7 +186,7 @@ function KitchenLink() {
       {msg && <Alert severity={msg.type} sx={{ mb: 1.5 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       {token ? (
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
-          <TextField size="small" value={url} label="Link da cozinha" InputProps={{ readOnly: true }} onFocus={(e) => e.target.select()} sx={{ flex: 1, minWidth: 260 }} />
+          <TextField size="small" value={url} label="Link da cozinha" onFocus={(e) => e.target.select()} sx={{ flex: 1, minWidth: 260 }} slotProps={{ input: { readOnly: true } }} />
           <Button variant="contained" onClick={copy}>Copiar</Button>
           <Button onClick={() => window.open(url, "_blank", "noopener")}>Abrir</Button>
           <Button color="error" disabled={busy} onClick={() => get(true)}>Trocar link</Button>
@@ -266,7 +304,7 @@ export function DeliverySettingsTab() {
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mt: 2 }}>
           <TextField size="small" type="number" label="Considerar desvio a partir de (metros)" value={meters}
-            onChange={(e) => setMeters(e.target.value)} sx={{ width: 300 }} inputProps={{ min: 50, max: 5000 }} />
+            onChange={(e) => setMeters(e.target.value)} sx={{ width: 300 }} slotProps={{ htmlInput: { min: 50, max: 5000 } }} />
           <Button variant="outlined" onClick={saveMeters}>Salvar</Button>
         </Box>
       </CollapsibleSection>
@@ -274,6 +312,13 @@ export function DeliverySettingsTab() {
       <CollapsibleSection id="entregas-despacho" title="Despacho automático"
         summary={company.auto_dispatch ? `Ligado · até ${company.auto_max_stops} entregas por saída` : "Desligado: o gestor despacha à mão"}>
         <AutoDispatch key={`${company.id}-${company.auto_max_stops}-${company.auto_max_detour_km}`} company={company} onSave={updateCompany} />
+      </CollapsibleSection>
+
+      <CollapsibleSection id="entregas-expediente" title="Expediente parado"
+        summary={company.shift_idle_minutes > 0
+          ? `${company.shift_idle_action === "end" ? "Encerra" : "Pausa"} após ${company.shift_idle_minutes} min sem atividade`
+          : "Desligado"}>
+        <ShiftIdle key={`${company.id}-${company.shift_idle_minutes}`} company={company} onSave={updateCompany} />
       </CollapsibleSection>
 
       <CollapsibleSection id="entregas-cozinha" title="Tela da cozinha" summary="Link para abrir a fila de preparo numa TV ou tablet">

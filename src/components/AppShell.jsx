@@ -1,5 +1,5 @@
 import {
-  Box, Typography, IconButton, Avatar, Menu, MenuItem, Chip, Drawer, Badge, Tooltip, useMediaQuery,
+  Box, Typography, IconButton, Avatar, Menu, MenuItem, Chip, Drawer, Badge, Tooltip, useMediaQuery, Alert, Button,
 } from "@mui/material";
 import LogoutIcon from "@mui/icons-material/Logout";
 import NotificationsActiveOutlinedIcon from "@mui/icons-material/NotificationsActiveOutlined";
@@ -19,7 +19,10 @@ import { useAuth } from "../context/AuthContext";
 import NotificationBell from "./NotificationBell";
 import { SupportBanner, PlatformNotices } from "./PlatformBanners";
 import { markFirstPageShown } from "./PageLoading";
-import { pushSupported, subscribeToPush } from "../utils/pushNotifications";
+
+/* global __APP_VERSION__ */
+const APP_VERSION = typeof __APP_VERSION__ === "undefined" ? "dev" : __APP_VERSION__;
+import { notificationsSupported, notificationPermission, enableNotifications } from "../utils/pushNotifications";
 
 const ROLE_LABEL = {
   platform: "Administrador da plataforma",
@@ -32,6 +35,7 @@ const WIDE = 236;
 const NARROW = 72;
 const COLLAPSE_KEY = "menu-lateral-recolhido";
 const HIDDEN_KEY = "menu-lateral-escondido";
+const NOTIFY_ASK_KEY = "pedir-notificacao";
 
 // Menu do colaborador (motoboy): cada item é uma página.
 const COLLABORATOR_ITEMS = [
@@ -99,6 +103,15 @@ export default function AppShell({ title, actions, children, nav }) {
   const { profile, isPlatformAdmin, isCompanyAdmin, isCollaborator, isSupervisor, logout } = useAuth();
   const [anchorEl, setAnchorEl] = useState(null);
   const [pushMsg, setPushMsg] = useState("");
+  // Equipe da empresa que ainda não respondeu à permissão: convite para
+  // receber os avisos na barra do celular (some se fechar).
+  const [askNotify, setAskNotify] = useState(() => {
+    try { return notificationPermission() === "default" && localStorage.getItem(NOTIFY_ASK_KEY) !== "0"; } catch { return false; }
+  });
+  const dismissNotify = () => {
+    try { localStorage.setItem(NOTIFY_ASK_KEY, "0"); } catch { /* sem armazenamento */ }
+    setAskNotify(false);
+  };
   const [mobileOpen, setMobileOpen] = useState(false);
   const [narrow, setNarrow] = useState(() => { try { return localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { return false; } });
   // No computador o menu também pode sumir de vez (botão ☰ do topo).
@@ -149,12 +162,13 @@ export default function AppShell({ title, actions, children, nav }) {
   const handleEnablePush = async () => {
     setPushMsg("Ativando...");
     try {
-      await subscribeToPush(profile.id);
+      await enableNotifications(profile.id);
       setPushMsg("Notificações ativadas!");
+      setAskNotify(false);
     } catch (err) {
       setPushMsg(err.message);
     }
-    setTimeout(() => setPushMsg(""), 3000);
+    setTimeout(() => setPushMsg(""), 4000);
   };
 
   const sideWidth = hidden ? 0 : narrow ? NARROW : WIDE;
@@ -188,7 +202,8 @@ export default function AppShell({ title, actions, children, nav }) {
           <Box sx={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
             <NavList items={menu.items} current={menu.current} onSelect={select} narrow={narrow} unread={unread} />
           </Box>
-          <Box sx={{ p: 1, borderTop: "1px solid #F5F5F4", display: "flex", justifyContent: narrow ? "center" : "flex-end" }}>
+          <Box sx={{ p: 1, borderTop: "1px solid #F5F5F4", display: "flex", alignItems: "center", justifyContent: narrow ? "center" : "space-between" }}>
+            {!narrow && <Typography sx={{ fontSize: 10.5, color: "#A8A29E", pl: 1 }} data-testid="versao">versão {APP_VERSION}</Typography>}
             <Tooltip title={narrow ? "Abrir menu" : "Recolher menu"} placement="right">
               <IconButton size="small" onClick={toggleNarrow} aria-label={narrow ? "Abrir menu" : "Recolher menu"}>
                 {narrow ? <ChevronRightIcon /> : <ChevronLeftIcon />}
@@ -199,9 +214,10 @@ export default function AppShell({ title, actions, children, nav }) {
       )}
 
       {menu && !desktop && (
-        <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} PaperProps={{ sx: { width: 270 } }}>
+        <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} slotProps={{ paper: { sx: { width: 270 } } }}>
           {brandBlock(false)}
           <NavList items={menu.items} current={menu.current} onSelect={select} narrow={false} unread={unread} />
+          <Typography sx={{ fontSize: 10.5, color: "#A8A29E", px: 2, py: 1.5, mt: "auto" }}>versão {APP_VERSION}</Typography>
         </Drawer>
       )}
 
@@ -259,10 +275,10 @@ export default function AppShell({ title, actions, children, nav }) {
               <MenuItem disabled sx={{ opacity: "1 !important", fontSize: 13 }}>
                 {profile?.name} · {profile?.email}
               </MenuItem>
-              {pushSupported() && (
+              {notificationsSupported() && (
                 <MenuItem onClick={handleEnablePush} sx={{ fontSize: 13, gap: 1 }}>
                   <NotificationsActiveOutlinedIcon sx={{ fontSize: 16 }} />
-                  {pushMsg || "Ativar notificações push"}
+                  {pushMsg || "Ativar notificações no celular"}
                 </MenuItem>
               )}
               <MenuItem onClick={logout} sx={{ fontSize: 13, gap: 1 }}>
@@ -274,6 +290,15 @@ export default function AppShell({ title, actions, children, nav }) {
 
         <Box sx={{ px: { xs: 2, sm: 4 }, py: { xs: 3, sm: 4 }, maxWidth: 1100, mx: "auto" }}>
           <PlatformNotices />
+          {askNotify && profile?.company_id && (
+            <Alert severity="info" data-testid="pedir-notificacao" sx={{ mb: 2 }}>
+              Ative as notificações para receber os avisos (nova saída, pausa, mensagens) na barra do celular.
+              <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
+                <Button variant="contained" size="small" onClick={handleEnablePush}>{pushMsg || "Ativar"}</Button>
+                <Button size="small" color="inherit" onClick={dismissNotify}>Agora não</Button>
+              </Box>
+            </Alert>
+          )}
           <ThemeProvider theme={theme}>{children}</ThemeProvider>
         </Box>
       </Box>
