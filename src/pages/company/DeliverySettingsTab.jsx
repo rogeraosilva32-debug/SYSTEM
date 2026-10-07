@@ -86,8 +86,8 @@ function AutoDispatch({ company, onSave }) {
       </Box>
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5, mt: 2 }}>
         <TextField size="small" type="number" label="Máximo de entregas por saída" value={form.auto_max_stops}
-          onChange={set("auto_max_stops")} inputProps={{ min: 1, max: 20 }}
-          helperText="A saída junta os pedidos prontos até este número, na melhor rota." />
+          onChange={set("auto_max_stops")}
+          helperText="A saída junta os pedidos prontos até este número, na melhor rota." slotProps={{ htmlInput: { min: 1, max: 20 } }} />
       </Box>
       <MoreOptions>
         <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5 }}>
@@ -100,11 +100,11 @@ function AutoDispatch({ company, onSave }) {
             <MenuItem value="any">Assim que chegam (sem esperar ficar pronto)</MenuItem>
           </TextField>
           <TextField size="small" type="number" label="Esperar para juntar pedidos (min)" value={form.auto_hold_minutes}
-            onChange={set("auto_hold_minutes")} inputProps={{ min: 0, max: 30 }}
-            helperText="0 = sai assim que houver motoboy livre." />
+            onChange={set("auto_hold_minutes")}
+            helperText="0 = sai assim que houver motoboy livre." slotProps={{ htmlInput: { min: 0, max: 30 } }} />
           <TextField size="small" type="number" label="Prazo para o motoboy iniciar a saída (min)" value={form.auto_accept_minutes}
-            onChange={set("auto_accept_minutes")} inputProps={{ min: 0, max: 60 }}
-            helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." />
+            onChange={set("auto_accept_minutes")}
+            helperText="Passou do prazo: a saída vai para outro e ele fica em pausa. 0 = sem prazo." slotProps={{ htmlInput: { min: 0, max: 60 } }} />
         </Box>
       </MoreOptions>
       {invalid && <Alert severity="error" sx={{ mt: 1.5 }}>{invalid}</Alert>}
@@ -148,7 +148,7 @@ function KitchenLink() {
       {msg && <Alert severity={msg.type} sx={{ mb: 1.5 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       {token ? (
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", alignItems: "center" }}>
-          <TextField size="small" value={url} label="Link da cozinha" InputProps={{ readOnly: true }} onFocus={(e) => e.target.select()} sx={{ flex: 1, minWidth: 260 }} />
+          <TextField size="small" value={url} label="Link da cozinha" onFocus={(e) => e.target.select()} sx={{ flex: 1, minWidth: 260 }} slotProps={{ input: { readOnly: true } }} />
           <Button variant="contained" onClick={copy}>Copiar</Button>
           <Button onClick={() => window.open(url, "_blank", "noopener")}>Abrir</Button>
           <Button color="error" disabled={busy} onClick={() => get(true)}>Trocar link</Button>
@@ -266,7 +266,7 @@ export function DeliverySettingsTab() {
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mt: 2 }}>
           <TextField size="small" type="number" label="Considerar desvio a partir de (metros)" value={meters}
-            onChange={(e) => setMeters(e.target.value)} sx={{ width: 300 }} inputProps={{ min: 50, max: 5000 }} />
+            onChange={(e) => setMeters(e.target.value)} sx={{ width: 300 }} slotProps={{ htmlInput: { min: 50, max: 5000 } }} />
           <Button variant="outlined" onClick={saveMeters}>Salvar</Button>
         </Box>
       </CollapsibleSection>

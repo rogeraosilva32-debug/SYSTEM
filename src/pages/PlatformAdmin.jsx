@@ -77,9 +77,7 @@ function NewCompanyDialog({ open, onClose, onCreated }) {
         />
         <TextField
           label="Limite de colaboradores" type="number" value={seats} fullWidth
-          onChange={(e) => setSeats(e.target.value)}
-          inputProps={{ min: 1 }}
-        />
+          onChange={(e) => setSeats(e.target.value)} slotProps={{ htmlInput: { min: 1 } }} />
       </DialogContent>
       <DialogActions sx={{ p: 2.5, pt: 0 }}>
         <Button onClick={onClose} sx={{ color: "#78716C" }}>Cancelar</Button>

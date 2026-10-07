@@ -25,8 +25,8 @@ export function PeriodPicker({ value, onChange }) {
       ))}
       {key === "custom" && (
         <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-          <TextField size="small" type="date" label="De" value={from} onChange={(e) => setFrom(e.target.value)} InputLabelProps={{ shrink: true }} />
-          <TextField size="small" type="date" label="Até" value={to} onChange={(e) => setTo(e.target.value)} InputLabelProps={{ shrink: true }} />
+          <TextField size="small" type="date" label="De" value={from} onChange={(e) => setFrom(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+          <TextField size="small" type="date" label="Até" value={to} onChange={(e) => setTo(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
           <Button variant="outlined" disabled={!from || !to || to < from} onClick={() => onChange([from, to])}>Ver</Button>
         </Box>
       )}

@@ -173,9 +173,8 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.2 }}>
       <Box sx={{ position: "relative" }}>
         <TextField size="small" fullWidth label="Buscar endereço" placeholder="Ex.: Rua Direita 100, Centro"
-          value={query} onChange={(e) => setQuery(e.target.value)}
-          InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: "#A8A29E", mr: 1 }} />,
-            endAdornment: searching ? <CircularProgress size={14} /> : null }} />
+          value={query} onChange={(e) => setQuery(e.target.value)} slotProps={{ input: { startAdornment: <SearchIcon sx={{ fontSize: 18, color: "#A8A29E", mr: 1 }} />,
+            endAdornment: searching ? <CircularProgress size={14} /> : null } }} />
         {suggestions.length > 0 && (
           <Paper sx={{ position: "absolute", zIndex: 1500, left: 0, right: 0, mt: 0.5, maxHeight: 260, overflowY: "auto" }}>
             <MenuList dense>
@@ -190,8 +189,7 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
       </Box>
 
       <TextField label="CEP (opcional)" size="small" value={cep} onChange={(e) => onCep(e.target.value)}
-        placeholder="00000-000" inputProps={{ inputMode: "numeric" }} sx={{ maxWidth: 200 }}
-        InputProps={{ endAdornment: cepBusy ? <CircularProgress size={14} /> : null }} />
+        placeholder="00000-000" sx={{ maxWidth: 200 }} slotProps={{ input: { endAdornment: cepBusy ? <CircularProgress size={14} /> : null }, htmlInput: { inputMode: "numeric" } }} />
       <Box sx={{ display: "grid", gridTemplateColumns: showNumber ? "2fr 1fr" : "1fr", gap: 1.2 }}>
         <TextField label="Rua" size="small" value={value.street || ""} onChange={(e) => setText({ street: e.target.value })} />
         {showNumber && <TextField label="Número" size="small" value={value.number || ""} onChange={(e) => setText({ number: e.target.value })} />}
@@ -199,7 +197,7 @@ export default function DeliveryAddressField({ value, onChange, store, showNumbe
       <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.2 }}>
         <TextField label="Bairro" size="small" value={value.neighborhood || ""} onChange={(e) => setText({ neighborhood: e.target.value })} />
         <TextField label="Cidade" size="small" value={value.city || ""} placeholder={store?.city || ""}
-          onChange={(e) => setText({ city: e.target.value })} InputLabelProps={store?.city ? { shrink: true } : undefined} />
+          onChange={(e) => setText({ city: e.target.value })} slotProps={{ inputLabel: store?.city ? { shrink: true } : undefined }} />
       </Box>
 
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>

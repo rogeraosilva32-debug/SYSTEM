@@ -49,8 +49,8 @@ export default function TimeOffManager({ collaboratorId, companyId, editable = t
     <Box>
       {editable && (
         <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <TextField size="small" label="De" type="date" value={start} onChange={(e) => setStart(e.target.value)} InputLabelProps={{ shrink: true }} />
-          <TextField size="small" label="Até" type="date" value={end} onChange={(e) => setEnd(e.target.value)} InputLabelProps={{ shrink: true }} />
+          <TextField size="small" label="De" type="date" value={start} onChange={(e) => setStart(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
+          <TextField size="small" label="Até" type="date" value={end} onChange={(e) => setEnd(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
           <TextField size="small" label="Motivo (opcional)" value={reason} onChange={(e) => setReason(e.target.value)} />
           <Button onClick={handleAdd} disabled={saving} variant="outlined" sx={{ height: 40 }}>
             {saving ? <CircularProgress size={16} /> : "Adicionar"}

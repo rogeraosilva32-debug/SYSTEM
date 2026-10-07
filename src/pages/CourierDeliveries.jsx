@@ -485,8 +485,7 @@ export default function CourierDeliveries() {
 
           <Box sx={{ p: 1.8, border: "1px solid #E7E5E4", borderRadius: "14px", background: "#fff", display: "flex", flexDirection: "column", gap: 1.2 }}>
             {company?.feature_delivery_code && (
-              <TextField label="Código de entrega (o cliente informa)" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                inputProps={{ inputMode: "numeric", style: { fontSize: 22, letterSpacing: "0.3em", textAlign: "center", fontWeight: 800 } }} />
+              <TextField label="Código de entrega (o cliente informa)" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 4))} slotProps={{ htmlInput: { inputMode: "numeric", style: { fontSize: 22, letterSpacing: "0.3em", textAlign: "center", fontWeight: 800 } } }} />
             )}
             <Button variant="contained" color="success" size="large" startIcon={<CheckIcon />} sx={{ py: 1.3 }}
               disabled={busy || (company?.feature_delivery_code && code.length !== 4)} onClick={complete}>

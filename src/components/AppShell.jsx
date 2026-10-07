@@ -199,7 +199,7 @@ export default function AppShell({ title, actions, children, nav }) {
       )}
 
       {menu && !desktop && (
-        <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} PaperProps={{ sx: { width: 270 } }}>
+        <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} slotProps={{ paper: { sx: { width: 270 } } }}>
           {brandBlock(false)}
           <NavList items={menu.items} current={menu.current} onSelect={select} narrow={false} unread={unread} />
         </Drawer>

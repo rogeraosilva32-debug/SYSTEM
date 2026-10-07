@@ -254,8 +254,7 @@ export default function SystemLog({ companyId = null }) {
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", md: companyId ? "2fr 1fr auto" : "2fr 1.2fr 1fr auto" }, gap: 1.5, mb: 1.5, alignItems: "center" }}>
         <TextField size="small" label="Buscar (cliente, pedido, pessoa, IP...)" value={search} onChange={(e) => setSearch(e.target.value)} />
         {!companyId && (
-          <TextField size="small" select label="Empresa" value={company} onChange={(e) => setCompany(e.target.value)}
-            SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}>
+          <TextField size="small" select label="Empresa" value={company} onChange={(e) => setCompany(e.target.value)} slotProps={{ inputLabel: { shrink: true }, select: { displayEmpty: true } }}>
             <MenuItem value="">Todas</MenuItem>
             {companies.map((c) => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
           </TextField>

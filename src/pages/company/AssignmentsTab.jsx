@@ -163,8 +163,8 @@ function NewAssignmentDialog({ open, onClose, onCreated, companyId, services, co
         <AddressPicker value={address} onChange={setAddress} showNumber gpsLabel="Usar minha localização atual" />
 
         <Box sx={{ display: "flex", gap: 1.5 }}>
-          <TextField label="Data" type="date" value={date} onChange={(e) => setDate(e.target.value)} fullWidth InputLabelProps={{ shrink: true }} />
-          <TextField label="Horário" type="time" value={time} onChange={(e) => setTime(e.target.value)} fullWidth InputLabelProps={{ shrink: true }} />
+          <TextField label="Data" type="date" value={date} onChange={(e) => setDate(e.target.value)} fullWidth slotProps={{ inputLabel: { shrink: true } }} />
+          <TextField label="Horário" type="time" value={time} onChange={(e) => setTime(e.target.value)} fullWidth slotProps={{ inputLabel: { shrink: true } }} />
           <TextField label="Duração (min)" type="number" value={duration} onChange={(e) => setDuration(e.target.value)} fullWidth />
         </Box>
 

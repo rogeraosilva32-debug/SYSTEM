@@ -53,8 +53,8 @@ function NoticeDialog({ notice, companies, onClose, onSaved }) {
       <DialogTitle sx={{ fontWeight: 800 }}>{notice ? "Editar aviso" : "Novo aviso"}</DialogTitle>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "8px !important" }}>
         {error && <Alert severity="error">{error}</Alert>}
-        <TextField label="Título" value={form.title} onChange={set("title")} fullWidth autoFocus inputProps={{ maxLength: 120 }} />
-        <TextField label="Mensagem" value={form.body} onChange={set("body")} fullWidth multiline minRows={3} inputProps={{ maxLength: 2000 }} />
+        <TextField label="Título" value={form.title} onChange={set("title")} fullWidth autoFocus slotProps={{ htmlInput: { maxLength: 120 } }} />
+        <TextField label="Mensagem" value={form.body} onChange={set("body")} fullWidth multiline minRows={3} slotProps={{ htmlInput: { maxLength: 2000 } }} />
         <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap" }}>
           <TextField select label="Tipo" value={form.level} onChange={set("level")} sx={{ flex: 1, minWidth: 160 }}>
             {LEVELS.map((l) => <MenuItem key={l.key} value={l.key}>{l.label}</MenuItem>)}
@@ -70,9 +70,9 @@ function NoticeDialog({ notice, companies, onClose, onSaved }) {
           renderInput={(p) => <TextField {...p} label="Empresas" placeholder={form.targets.length ? "" : "Todas as empresas"} helperText="Vazio = todas as empresas" />} />
         <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap" }}>
           <TextField type="datetime-local" label="Mostrar a partir de" value={form.starts_at} onChange={set("starts_at")}
-            InputLabelProps={{ shrink: true }} helperText="Vazio = agora" sx={{ flex: 1, minWidth: 200 }} />
+            helperText="Vazio = agora" sx={{ flex: 1, minWidth: 200 }} slotProps={{ inputLabel: { shrink: true } }} />
           <TextField type="datetime-local" label="Até" value={form.ends_at} onChange={set("ends_at")}
-            InputLabelProps={{ shrink: true }} helperText="Vazio = até apagar" sx={{ flex: 1, minWidth: 200 }} />
+            helperText="Vazio = até apagar" sx={{ flex: 1, minWidth: 200 }} slotProps={{ inputLabel: { shrink: true } }} />
         </Box>
       </DialogContent>
       <DialogActions sx={{ p: 2.5, pt: 0 }}>
