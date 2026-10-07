@@ -8,6 +8,7 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlineOutlined";
 import supabase from "../services/supabase";
 import { useAuth } from "../context/AuthContext";
+import { showStatusBarNotification } from "../utils/pushNotifications";
 
 const ICON_BY_TYPE = {
   new_assignment: <AssignmentIcon sx={{ fontSize: 18, color: "#4A6C8C" }} />,
@@ -25,9 +26,8 @@ function timeAgo(iso) {
   return `${Math.round(seconds / 86400)} d`;
 }
 
-// Notificações internas do app (não são push do celular — isso exigiria
-// configurar chave VAPID e permissão do navegador, um passo à parte). Aqui
-// é um sino no topo com lista, atualizado em tempo real.
+// Sino no topo com a lista de avisos, em tempo real. Com a permissão dada,
+// cada aviso novo também aparece na barra de status do celular.
 export default function NotificationBell() {
   const { profile } = useAuth();
   const [items, setItems] = useState([]);
@@ -50,7 +50,10 @@ export default function NotificationBell() {
       .channel(`notifications-${profile.id}`)
       .on("postgres_changes", {
         event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${profile.id}`,
-      }, (payload) => setItems((prev) => [payload.new, ...prev]))
+      }, (payload) => {
+        setItems((prev) => [payload.new, ...prev]);
+        showStatusBarNotification(payload.new);
+      })
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [profile?.id]);

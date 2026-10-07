@@ -389,9 +389,16 @@ troque nos dois lugares (`.env` e os secrets acima).
 supabase functions deploy send-push
 ```
 
-**3. A pessoa ativa manualmente** — no menu do avatar (canto superior
-direito), item "Ativar notificações push". O navegador pede permissão,
-e a partir daí a inscrição fica salva em `push_subscriptions`.
+**3. A pessoa ativa** — o app mostra um aviso "Ative as notificações"
+para a equipe da empresa (também no menu do avatar, item "Ativar
+notificações no celular"). O navegador pede permissão, e a partir daí a
+inscrição fica salva em `push_subscriptions`.
+
+**Sem configurar nada disso**, depois da permissão, todo aviso novo do
+sino já aparece na barra de status enquanto o app estiver aberto (mesmo
+em segundo plano). O push do servidor cobre o app fechado; os dois usam a
+mesma tag (`n-<id da notificação>`), então o aviso não aparece duplicado.
+No iPhone, notificação só funciona com o app instalado na tela inicial.
 
 **O que já dispara push de verdade agora:** mandar uma mensagem no chat
 (a chamada pra `send-push` já está no código). **O que ainda não dispara

@@ -81,7 +81,10 @@ Deno.serve(async (req) => {
 
     const { data: subs } = await admin.from("push_subscriptions").select("*").eq("user_id", user_id);
 
-    const payload = JSON.stringify({ title, message: message || "", url: url || "/" });
+    // Vindo do webhook da tabela notifications: a tag é a mesma que o app
+    // aberto usa, para o aviso não aparecer duas vezes.
+    const tag = raw?.record?.id ? `n-${raw.record.id}` : undefined;
+    const payload = JSON.stringify({ title, message: message || "", url: url || "/", tag });
     let sent = 0;
 
     for (const sub of subs || []) {

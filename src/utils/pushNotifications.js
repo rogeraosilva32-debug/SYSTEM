@@ -65,3 +65,41 @@ export async function unsubscribeFromPush() {
   await subscription.unsubscribe();
   await supabase.from("push_subscriptions").delete().eq("endpoint", endpoint);
 }
+
+// Notificação na barra do celular/computador. Com o app aberto (mesmo em
+// segundo plano) ela sai daqui, sem depender do servidor de push; com o app
+// fechado, sai pelo push (função send-push), quando estiver configurado.
+export function notificationsSupported() {
+  return typeof window !== "undefined" && "Notification" in window && "serviceWorker" in navigator && window.isSecureContext;
+}
+
+export function notificationPermission() {
+  return notificationsSupported() ? Notification.permission : "unsupported";
+}
+
+// Pede a permissão e, se o push estiver configurado, inscreve o aparelho.
+// Devolve "push" (chega com o app fechado) ou "local" (só com o app aberto).
+export async function enableNotifications(userId) {
+  if (!notificationsSupported()) throw new Error("Este navegador não mostra notificações. No iPhone, instale o app na tela inicial.");
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") throw new Error("Notificações bloqueadas. Libere nas configurações do navegador para este site.");
+  try {
+    await subscribeToPush(userId);
+    return "push";
+  } catch {
+    return "local";
+  }
+}
+
+// A mesma tag do push do servidor: se os dois chegarem, aparece uma só.
+export async function showStatusBarNotification(n) {
+  if (notificationPermission() !== "granted") return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return;
+    await reg.showNotification(n.title || "Aviso", {
+      body: n.message || "", tag: `n-${n.id}`, icon: "/icon-192.png", badge: "/icon-192.png",
+      vibrate: [200, 100, 200], data: { url: "/" },
+    });
+  } catch { /* sem service worker: fica só no sino */ }
+}
