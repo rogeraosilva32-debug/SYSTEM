@@ -5547,6 +5547,31 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
+-- CHEGADA NA LOJA AUTOMÁTICA PELO GPS (07/10/2026).
+-- Cada posição enviada pelo celular do motoboy que cai a até 100 m da loja
+-- encerra a volta pendente dele ("Voltando para a loja" → na loja), mesmo
+-- que a tela de volta não esteja aberta. O botão continua como reserva.
+-- ---------------------------------------------------------------------
+create or replace function public.ping_back_at_store()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_store record;
+begin
+  select store_lat, store_lng into v_store from public.companies where id = new.company_id;
+  if v_store.store_lat is null
+     or public.geo_distance_m(new.lat, new.lng, v_store.store_lat, v_store.store_lng) > 100 then
+    return null;
+  end if;
+  update public.delivery_runs set returned_at = now(), returned_by = 'gps'
+   where courier_id = new.courier_id and status = 'finished' and returned_at is null
+     and finished_at > now() - interval '3 hours';
+  return null;
+end;
+$$;
+drop trigger if exists trg_ping_back_at_store on public.location_pings;
+create trigger trg_ping_back_at_store after insert on public.location_pings
+  for each row execute function public.ping_back_at_store();
+
+-- ---------------------------------------------------------------------
 -- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).
 -- O Supabase dá EXECUTE de toda função para anon. Aqui quem já podia
 -- (logado) continua podendo, e o visitante sem login só chama as funções

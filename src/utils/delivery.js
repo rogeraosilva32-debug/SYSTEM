@@ -170,3 +170,13 @@ export async function fetchRouteOptions(from, to) {
 
 export const ROUTE_COLORS = ["#1C1917", "#4F5BA6", "#B0793D"];
 export const ROUTE_NAMES = ["Principal (mais rápida)", "Alternativa 1", "Alternativa 2"];
+
+// Motoboy na loja ou fora, pela última posição enviada pelo celular dele
+// (vale só se for recente). null = sem posição recente ou loja sem endereço.
+export const AT_STORE_METERS = 150;
+export function storePresence(courier, store, maxAgeMs = 5 * 60000) {
+  if (!store || courier?.last_lat == null || !courier.last_location_at) return null;
+  if (Date.now() - new Date(courier.last_location_at).getTime() > maxAgeMs) return null;
+  return distanceToPath({ lat: courier.last_lat, lng: courier.last_lng }, [[store.lat, store.lng]]) <= AT_STORE_METERS
+    ? "na loja" : "fora da loja";
+}

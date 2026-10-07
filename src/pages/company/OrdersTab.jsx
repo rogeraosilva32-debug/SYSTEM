@@ -29,7 +29,7 @@ import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
 import {
   ORDER_STATUS, PAYMENT_LABEL, SOURCE_LABEL, money, orderAddress, whatsappUrl,
-  deliveryCodeMessage, groupByNeighborhood, suggestStopOrder, parsePrice, itemUnitPrice,
+  deliveryCodeMessage, groupByNeighborhood, suggestStopOrder, parsePrice, itemUnitPrice, storePresence,
 } from "../../utils/delivery";
 import PageLoading from "../../components/PageLoading";
 
@@ -822,7 +822,7 @@ function RunDialog({ open, onClose, onDone, couriers, available, run, courierFee
 }
 
 // ───────────────────────── Motoboys em expediente ─────────────────────────
-function ShiftPanel({ shifts, couriers, runs, returning = [], onChanged }) {
+function ShiftPanel({ shifts, couriers, runs, returning = [], store, onChanged }) {
   const [error, setError] = useState("");
   if (!shifts.length) return null;
   const act = async (fn) => {
@@ -837,10 +837,14 @@ function ShiftPanel({ shifts, couriers, runs, returning = [], onChanged }) {
       {error && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>{error}</Alert>}
       <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
         {shifts.map((sh) => {
-          const name = couriers.find((c) => c.id === sh.courier_id)?.name || "Motoboy";
+          const courier = couriers.find((c) => c.id === sh.courier_id);
+          const name = courier?.name || "Motoboy";
           const run = runs.find((r) => r.courier_id === sh.courier_id);
           const back = !run && returning.find((r) => r.courier_id === sh.courier_id);
-          const state = sh.paused ? "Em pausa" : run ? (run.status === "planned" ? "Saída aguardando" : "Em rota") : back ? "Voltando para a loja" : "Livre";
+          // Na loja ou fora: automático pelo GPS (fora de rota e de volta).
+          const where = run?.status === "in_progress" || back ? null : storePresence(courier, store);
+          const state = (sh.paused ? "Em pausa" : run ? (run.status === "planned" ? "Saída aguardando" : "Em rota") : back ? "Voltando para a loja" : "Livre")
+            + (where ? ` · ${where}` : "");
           const color = sh.paused ? "#B0793D" : run ? "#4F5BA6" : back ? "#7A5512" : "#4B7A5E";
           return (
             <Box key={sh.id} sx={{ display: "flex", alignItems: "center", gap: 1, px: 1.2, py: 0.6, border: "1px solid #E7E5E4", borderRadius: "10px", background: "#fff" }}>
@@ -998,7 +1002,8 @@ export function OrdersTab() {
             : "Despacho automático ligado, mas nenhum motoboy está em expediente. Os pedidos esperam até alguém tocar em “Iniciar expediente” no app."}
         </Alert>
       )}
-      <ShiftPanel shifts={shifts} couriers={couriers} runs={runs} returning={returning} onChanged={load} />
+      <ShiftPanel shifts={shifts} couriers={couriers} runs={runs} returning={returning}
+        store={company?.store_lat ? { lat: company.store_lat, lng: company.store_lng } : null} onChanged={load} />
       {zones.length === 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>Cadastre os bairros atendidos e as taxas na aba “Entregas: ajustes” para a taxa ser preenchida sozinha.</Alert>
       )}
