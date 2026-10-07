@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import {
   Box, Typography, Button, IconButton, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, MenuItem, FormControlLabel, Switch, CircularProgress,
@@ -7,18 +7,20 @@ import {
 import SettingsIcon from "@mui/icons-material/SettingsOutlined";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
-import supabase from "../services/supabase";
+import supabase, { kitchenClient } from "../services/supabase";
 import MotoboyIcon from "../components/MotoboyIcon";
 import { setKitchenToken } from "../services/eventLog";
 
 // Modo cozinha: tela cheia com a fila de preparo, para deixar numa TV ou
-// tablet na cozinha. Abre com login de gestor (/cozinha) ou pelo link da
-// tela (/cozinha/<link>), que não precisa de login e só vê a fila.
+// tablet na cozinha. Funciona pelo link da tela (/cozinha/<link>), sem login
+// e sem usar a conta de quem está no aparelho: a cozinha não tem relação com
+// a conta do admin. O admin que abre /cozinha é levado para o link; o
+// supervisor (que não gera o link) continua pela própria conta.
 // Os ajustes (quantos pedidos por tela, fixo ou alternando) ficam em cada aparelho.
 
 const SETTINGS_KEY = "kitchen-display";
 const DEFAULTS = { perPage: 4, mode: "static", seconds: 15, buttons: true, sound: true };
-const POLL_MS = 8000;
+const POLL_MS = 5000;
 
 function loadSettings() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") }; } catch { return DEFAULTS; }
@@ -137,6 +139,9 @@ function SettingsDialog({ open, value, onClose, onChange }) {
 
 export default function KitchenDisplay() {
   const { token } = useParams();
+  const navigate = useNavigate();
+  const db = token ? kitchenClient() : supabase;
+  const [linking, setLinking] = useState(!token);
   const [board, setBoard] = useState(null);
   const [fatal, setFatal] = useState("");
   const [offline, setOffline] = useState(false);
@@ -153,9 +158,23 @@ export default function KitchenDisplay() {
   // Sem login, os avisos de conexão desta tela vão para o log pelo link dela.
   useEffect(() => { setKitchenToken(token); return () => setKitchenToken(null); }, [token]);
 
+  // Admin logado em /cozinha: troca para o link da cozinha (sem a conta dele).
+  useEffect(() => {
+    if (token) return;
+    let alive = true;
+    supabase.rpc("kitchen_display_token", { p_reset: false })
+      .then(({ data, error }) => {
+        if (!alive) return;
+        if (!error && data) navigate(`/cozinha/${data}`, { replace: true });
+        else setLinking(false);
+      }, () => alive && setLinking(false));
+    return () => { alive = false; };
+  }, [token, navigate]);
+
   const load = useCallback(async () => {
+    if (linking) return;
     try {
-      const { data, error } = await supabase.rpc("kitchen_board", { p_token: token || null });
+      const { data, error } = await db.rpc("kitchen_board", { p_token: token || null });
       if (error) {
         // Link trocado/inválido ou sem permissão: não adianta tentar de novo.
         if (/inválido|permissão|Could not find/i.test(error.message)) setFatal(error.message.includes("Could not find")
@@ -172,13 +191,16 @@ export default function KitchenDisplay() {
     } catch {
       setOffline(true);
     }
-  }, [token]);
+  }, [token, db, linking]);
 
   useEffect(() => {
     load(); // eslint-disable-line react-hooks/set-state-in-effect
     const poll = setInterval(load, POLL_MS);
     const clock = setInterval(() => setNow(Date.now()), 15000);
-    return () => { clearInterval(poll); clearInterval(clock); };
+    // Voltou para a tela (outra aba, tablet acordou): atualiza na hora.
+    const onVisible = () => { if (document.visibilityState === "visible") { setNow(Date.now()); load(); } };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(poll); clearInterval(clock); document.removeEventListener("visibilitychange", onVisible); };
   }, [load]);
 
   // Tela sempre acesa (quando o aparelho permite).
@@ -217,7 +239,7 @@ export default function KitchenDisplay() {
     if (busyId) return;
     setBusyId(order.id); setActionError("");
     try {
-      const { error } = await supabase.rpc("kitchen_advance", { p_order_id: order.id, p_token: token || null });
+      const { error } = await db.rpc("kitchen_advance", { p_order_id: order.id, p_token: token || null });
       if (error) setActionError(error.message);
     } catch {
       setActionError("Sem conexão. Tente de novo.");

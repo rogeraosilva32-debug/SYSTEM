@@ -80,4 +80,18 @@ supabase.auth.onAuthStateChange((event) => {
   if (event === "SIGNED_OUT") { passwordRecovery.event = false; passwordRecovery.fromUrl = false; }
 });
 
+// Tela da cozinha aberta pelo link: cliente próprio, sem login. Não lê nem
+// usa a sessão de quem está logado no aparelho (ex.: o admin), então o que a
+// cozinha faz nunca sai em nome do admin e sair da conta não derruba a tela.
+let kitchen = null;
+export function kitchenClient() {
+  if (!kitchen) {
+    kitchen = createClient(supabaseUrl, supabaseKey, {
+      global: { fetch: monitoredFetch },
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "cozinha-sem-login" },
+    });
+  }
+  return kitchen;
+}
+
 export default supabase;

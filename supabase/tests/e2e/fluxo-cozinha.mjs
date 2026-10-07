@@ -100,10 +100,37 @@ check('pronto sai da fila e vai para os prontos', sql(`select status from delive
   && await tv.getByText('5 pedidos para preparar').isVisible());
 await tv.screenshot({ path: `${SHOTS}/71-cozinha-prontos.png` });
 
-// ───────── Gestor logado também abre ─────────
+// ───────── Admin que abre /cozinha vai para o link, sem a conta dele ─────────
+const authHeaders = [];
+admin.on('request', (r) => { if (/kitchen_(board|advance)/.test(r.url())) authHeaders.push(r.headers()['authorization'] || ''); });
 await admin.goto(APP + '/cozinha');
 await admin.getByText('5 pedidos para preparar').waitFor({ timeout: 10000 });
-check('gestor abre /cozinha logado', true);
+check('admin em /cozinha é levado para o link da cozinha', admin.url() === link);
+await admin.getByTestId('kitchen-order').first().getByRole('button', { name: 'Iniciar preparo' }).click();
+await admin.getByText('EM PREPARO').first().waitFor();
+const adminJwt = await admin.evaluate(() => Object.keys(localStorage).filter((k) => /auth-token/.test(k)).map((k) => JSON.parse(localStorage[k])?.access_token).find(Boolean));
+check('cozinha não usa a sessão do admin logado no aparelho',
+  authHeaders.length > 0 && adminJwt && authHeaders.every((h) => !h.includes(adminJwt)));
+check('ação da cozinha sai como "Tela da cozinha" no log, não como o admin',
+  sql(`select actor_name from system_log where entity is not null order by id desc limit 1`) === 'Tela da cozinha');
+
+// ───────── Gestor voltando da cozinha vê a mudança na hora ─────────
+// (aqui não há tempo real: só a volta para a aba atualiza antes dos 30 s)
+const painel = admin;
+await painel.goto(APP + '/painel');
+await painel.getByText('Cliente 2').first().waitFor({ timeout: 10000 });
+// Quantos pedidos a coluna "Em preparo" mostra no cabeçalho.
+const emPreparo = () => painel.evaluate(() => {
+  const h = [...document.querySelectorAll('*')].find((e) => e.childElementCount === 0 && e.textContent.trim().toUpperCase() === 'EM PREPARO');
+  return Number(h?.parentElement?.textContent.replace(/\D+/g, '') || -1);
+});
+const before = await emPreparo();
+sql(`update delivery_orders set status = 'preparing' where customer_name = 'Cliente 3'`);
+await painel.waitForTimeout(1000);
+const semFoco = await emPreparo();
+await painel.evaluate(() => window.dispatchEvent(new Event('focus')));
+await painel.waitForTimeout(2000);
+check('voltar para a aba do painel atualiza os pedidos na hora', semFoco === before && (await emPreparo()) === before + 1);
 
 // ───────── Trocar o link derruba o antigo ─────────
 await admin.goto(APP + '/painel');

@@ -943,14 +943,38 @@ export function OrdersTab() {
       clearTimeout(reloadTimer.current);
       reloadTimer.current = setTimeout(load, 400);
     };
-    const channel = supabase.channel(`orders-${companyId}`)
+    const connect = () => supabase.channel(`orders-${companyId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_orders", filter: `company_id=eq.${companyId}` }, schedule)
       .on("postgres_changes", { event: "*", schema: "public", table: "delivery_runs", filter: `company_id=eq.${companyId}` }, schedule)
       .on("postgres_changes", { event: "*", schema: "public", table: "courier_shifts", filter: `company_id=eq.${companyId}` }, schedule)
       .subscribe();
+    let channel = connect();
     // Rede de segurança do despacho automático (o banco também despacha sozinho).
-    const interval = setInterval(() => { if (!document.hidden) supabase.rpc("auto_dispatch_tick").then(load); }, 30000);
-    return () => { clearTimeout(reloadTimer.current); clearInterval(interval); supabase.removeChannel(channel); };
+    let lastTick = 0;
+    const tick = () => {
+      if (Date.now() - lastTick < 2000) return; // foco + aba visível chegam juntos
+      lastTick = Date.now();
+      supabase.rpc("auto_dispatch_tick").then(load, load);
+    };
+    const interval = setInterval(() => { if (!document.hidden) tick(); }, 30000);
+    // Aba em segundo plano (ex.: o gestor estava no modo cozinha): o navegador
+    // segura o tempo real e os avisos chegam atrasados. Ao voltar, atualiza na
+    // hora e reconecta o tempo real se ele caiu.
+    const onVisible = () => {
+      if (document.hidden) return;
+      if (channel.state !== "joined" && channel.state !== "joining") {
+        supabase.removeChannel(channel);
+        channel = connect();
+      }
+      tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      clearTimeout(reloadTimer.current); clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("focus", onVisible);
+      supabase.removeChannel(channel);
+    };
   }, [companyId, load]);
 
   const dispatchable = useMemo(

@@ -1,4 +1,4 @@
-import supabase, { fetchMonitor } from "./supabase";
+import supabase, { fetchMonitor, kitchenClient } from "./supabase";
 
 // Log do sistema (visto pelo administrador da plataforma): o app avisa o
 // banco quando a internet cai e volta, quando o servidor não responde, de
@@ -61,6 +61,7 @@ function enqueue(payload, uid, at = Date.now()) {
 }
 
 async function currentUid() {
+  if (kitchenToken) return null;
   try {
     const { data } = await supabase.auth.getSession();
     return data?.session?.user?.id || null;
@@ -71,7 +72,9 @@ async function currentUid() {
 
 async function send(payload) {
   try {
-    const { error } = await supabase.rpc("log_client_event", payload);
+    // Evento da tela da cozinha vai sem a sessão de quem está logado no aparelho.
+    const client = payload.p_kitchen_token ? kitchenClient() : supabase;
+    const { error } = await client.rpc("log_client_event", payload);
     // Erro de rede: guarda para mandar depois. Outro erro (banco sem a
     // função ainda, por exemplo): descarta, o log nunca atrapalha o uso.
     if (error && /fetch|network|Failed|Load failed/i.test(error.message || "")) return false;
