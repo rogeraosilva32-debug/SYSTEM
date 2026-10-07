@@ -113,6 +113,44 @@ function AutoDispatch({ company, onSave }) {
   );
 }
 
+// Limite de expediente parado: motoboy sem nenhuma ação (e longe da loja)
+// é pausado ou tem o expediente encerrado; o gestor é avisado.
+function ShiftIdle({ company, onSave }) {
+  const [minutes, setMinutes] = useState(company.shift_idle_minutes ?? 0);
+  const [invalid, setInvalid] = useState("");
+  if (company.shift_idle_minutes === undefined) {
+    return <Alert severity="warning">Rode de novo o supabase-b2b-schema.sql no Supabase para liberar o limite de expediente.</Alert>;
+  }
+  const save = () => {
+    const n = String(minutes).trim() === "" ? NaN : Number(minutes);
+    if (!Number.isInteger(n) || n < 0 || n > 720) { setInvalid("Limite: de 0 a 720 minutos (0 = desligado)."); return; }
+    setInvalid("");
+    onSave({ shift_idle_minutes: n });
+  };
+  return (
+    <>
+      <Typography sx={{ fontSize: 12.5, color: "#78716C", maxWidth: 560, mb: 2 }}>
+        Conta como ação iniciar ou terminar uma saída, finalizar uma entrega, chegar na loja e voltar da pausa.
+        Quem está esperando na loja (com o GPS ligado) não é considerado parado. Se o motoboy passar do limite sem
+        nenhuma ação, por exemplo sem voltar para pegar novas entregas, o sistema age e avisa o gestor. Durante uma
+        saída em andamento o gestor só recebe o aviso.
+      </Typography>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 1.5 }}>
+        <TextField size="small" type="number" label="Limite sem atividade (min)" value={minutes}
+          onChange={(e) => setMinutes(e.target.value)}
+          helperText="0 = desligado. Ex.: 60 para uma hora." slotProps={{ htmlInput: { min: 0, max: 720 } }} />
+        <TextField select size="small" label="Ao passar do limite" value={company.shift_idle_action || "pause"}
+          onChange={(e) => onSave({ shift_idle_action: e.target.value })} helperText=" ">
+          <MenuItem value="pause">Pausar (para de receber entregas)</MenuItem>
+          <MenuItem value="end">Encerrar o expediente</MenuItem>
+        </TextField>
+      </Box>
+      {invalid && <Alert severity="error" sx={{ mt: 1.5 }}>{invalid}</Alert>}
+      <Button variant="outlined" sx={{ mt: 1.5 }} onClick={save}>Salvar limite</Button>
+    </>
+  );
+}
+
 // Link da tela da cozinha: abre a fila de preparo sem login (só a fila,
 // sem telefone, endereço ou valores). Trocar o link derruba o anterior.
 function KitchenLink() {
@@ -274,6 +312,13 @@ export function DeliverySettingsTab() {
       <CollapsibleSection id="entregas-despacho" title="Despacho automático"
         summary={company.auto_dispatch ? `Ligado · até ${company.auto_max_stops} entregas por saída` : "Desligado: o gestor despacha à mão"}>
         <AutoDispatch key={`${company.id}-${company.auto_max_stops}-${company.auto_max_detour_km}`} company={company} onSave={updateCompany} />
+      </CollapsibleSection>
+
+      <CollapsibleSection id="entregas-expediente" title="Expediente parado"
+        summary={company.shift_idle_minutes > 0
+          ? `${company.shift_idle_action === "end" ? "Encerra" : "Pausa"} após ${company.shift_idle_minutes} min sem atividade`
+          : "Desligado"}>
+        <ShiftIdle key={`${company.id}-${company.shift_idle_minutes}`} company={company} onSave={updateCompany} />
       </CollapsibleSection>
 
       <CollapsibleSection id="entregas-cozinha" title="Tela da cozinha" summary="Link para abrir a fila de preparo numa TV ou tablet">

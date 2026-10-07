@@ -4264,7 +4264,7 @@ create or replace function public.log_field(t text, f text) returns text languag
     "grace_days": "dias de tolerância", "store_street": "rua da loja", "store_number": "número da loja", "store_neighborhood": "bairro da loja",
     "store_city": "cidade da loja", "store_state": "estado da loja", "store_lat": "latitude da loja", "store_lng": "longitude da loja",
     "courier_fee_on_order": "taxa do motoboy no pedido", "auto_dispatch": "despacho automático", "auto_max_stops": "máximo de entregas por saída", "auto_max_detour_km": "desvio máximo (km)",
-    "auto_hold_minutes": "espera para juntar pedidos", "auto_accept_minutes": "prazo para o motoboy confirmar", "auto_dispatch_when": "quando despachar", "license_key": "chave de licença",
+    "auto_hold_minutes": "espera para juntar pedidos", "auto_accept_minutes": "prazo para o motoboy confirmar", "shift_idle_minutes": "limite de expediente parado (min)", "shift_idle_action": "ação no expediente parado", "auto_dispatch_when": "quando despachar", "license_key": "chave de licença",
     "collaborator_invite_code": "código de convite", "customer_name": "cliente", "customer_phone": "telefone do cliente", "address_street": "rua",
     "address_number": "número", "address_complement": "complemento", "address_neighborhood": "bairro", "address_city": "cidade",
     "items": "itens", "subtotal": "subtotal", "delivery_fee": "taxa de entrega", "total": "total",
@@ -4409,7 +4409,9 @@ begin
       v_msg := v_label || ' encerrou o expediente'
                || case when coalesce((v_new ->> 'km')::numeric, 0) > 0
                        then ' (' || replace(to_char((v_new ->> 'km')::numeric, 'FM999990.0'), '.', ',') || ' km)' else '' end;
-      if (v_new ->> 'closed_by') is not null and (v_new ->> 'closed_by') <> (v_new ->> 'courier_id') then
+      if (v_new ->> 'closed_by') is null then
+        v_msg := replace(v_msg, v_label || ' encerrou o expediente', 'Expediente de ' || v_label || ' encerrado pelo sistema');
+      elsif (v_new ->> 'closed_by') <> (v_new ->> 'courier_id') then
         v_msg := replace(v_msg, v_label || ' encerrou o expediente', 'Expediente de ' || v_label || ' encerrado por ' || public.log_person((v_new ->> 'closed_by')::uuid));
       end if;
     elsif v_changes ? 'paused' then
@@ -5383,6 +5385,166 @@ begin
 end;
 $$;
 grant execute on function public.notify_run_off_route(uuid, integer) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- LIMITE DE EXPEDIENTE PARADO (07/10/2026).
+-- A empresa define quantos minutos o motoboy pode ficar em expediente sem
+-- nenhuma ação (iniciar/encerrar saída, finalizar entrega, chegar na loja,
+-- voltar da pausa). Estar na loja (GPS perto dela) conta como presença, então
+-- quem espera pedido na loja não é punido; quem some ou não volta para pegar
+-- novas entregas é pausado (ou tem o expediente encerrado, se a empresa
+-- preferir), e o gestor é avisado. Durante uma saída em andamento nada muda
+-- sozinho: o gestor só recebe um aviso. 0 = desligado.
+-- ---------------------------------------------------------------------
+alter table public.companies add column if not exists shift_idle_minutes integer not null default 0;
+alter table public.companies add column if not exists shift_idle_action text not null default 'pause';
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'companies_shift_idle_minutes_check') then
+    alter table public.companies add constraint companies_shift_idle_minutes_check check (shift_idle_minutes between 0 and 720);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'companies_shift_idle_action_check') then
+    alter table public.companies add constraint companies_shift_idle_action_check check (shift_idle_action in ('pause', 'end'));
+  end if;
+end $$;
+alter table public.courier_shifts add column if not exists resumed_at timestamptz;
+alter table public.courier_shifts add column if not exists idle_alerted_at timestamptz;
+
+-- Voltar da pausa conta como ação.
+create or replace function public.shift_mark_resumed()
+returns trigger language plpgsql as $$
+begin
+  if old.paused and not new.paused then new.resumed_at := now(); end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_shift_mark_resumed on public.courier_shifts;
+create trigger trg_shift_mark_resumed before update of paused on public.courier_shifts
+  for each row execute function public.shift_mark_resumed();
+
+-- Última ação do motoboy no expediente (ou presença na loja pelo GPS).
+create or replace function public.shift_last_activity(p_shift uuid)
+returns timestamptz language sql stable security definer set search_path = public as $$
+  select greatest(
+    s.started_at, s.resumed_at,
+    (select max(greatest(dr.started_at, dr.finished_at, dr.returned_at))
+       from public.delivery_runs dr where dr.courier_id = s.courier_id and dr.created_at >= s.started_at - interval '1 day'),
+    (select max(o.delivered_at) from public.delivery_orders o
+      where o.courier_id = s.courier_id and o.delivered_at >= s.started_at),
+    (select max(lp.recorded_at) from public.location_pings lp
+      where lp.courier_id = s.courier_id and lp.recorded_at >= now() - make_interval(mins => greatest(c.shift_idle_minutes, 1))
+        and c.store_lat is not null and public.geo_km(lp.lat, lp.lng, c.store_lat, c.store_lng) <= 0.15))
+  from public.courier_shifts s join public.companies c on c.id = s.company_id
+  where s.id = p_shift
+$$;
+revoke execute on function public.shift_last_activity(uuid) from public, anon, authenticated;
+
+create or replace function public.shift_idle_check(p_company uuid)
+returns integer language plpgsql security definer set search_path = public as $$
+declare
+  c record;
+  r record;
+  v_last timestamptz;
+  v_min int;
+  n int := 0;
+begin
+  select * into c from public.companies where id = p_company;
+  if c.id is null or c.shift_idle_minutes <= 0 or c.status <> 'active' then return 0; end if;
+  if not pg_try_advisory_xact_lock(hashtext('shift_idle:' || p_company::text)) then return 0; end if;
+  perform set_config('app.log_actor', 'Limite de expediente', true);
+  for r in select s.*, p.name as courier_name,
+                  exists (select 1 from public.delivery_runs dr
+                          where dr.courier_id = s.courier_id and dr.status = 'in_progress') as on_run
+             from public.courier_shifts s join public.profiles p on p.id = s.courier_id
+            where s.company_id = p_company and s.ended_at is null and not s.paused loop
+    v_last := public.shift_last_activity(r.id);
+    continue when v_last > now() - make_interval(mins => c.shift_idle_minutes);
+    v_min := floor(extract(epoch from now() - v_last) / 60);
+
+    if r.on_run then
+      -- Em saída: só avisa o gestor, uma vez por período parado.
+      continue when r.idle_alerted_at is not null and r.idle_alerted_at >= v_last;
+      update public.courier_shifts set idle_alerted_at = now() where id = r.id;
+      perform public.notify_company_managers(p_company, 'shift_idle', 'Motoboy parado na saída',
+        coalesce(r.courier_name, 'Motoboy') || ' está há ' || v_min || ' min sem finalizar nenhuma entrega.');
+      perform public.log_event(p_company, 'expediente', 'warning', 'shift_idle_alert',
+        coalesce(r.courier_name, 'Motoboy') || ' está há ' || v_min || ' min sem ação durante a saída',
+        'courier_shifts', r.id::text, null, jsonb_build_object('minutos', v_min));
+    elsif c.shift_idle_action = 'end' then
+      update public.courier_shifts set ended_at = now(), closed_by = null,
+             km = public.courier_km(r.courier_id, r.started_at, now())
+        where id = r.id;
+      perform public.release_planned_runs(r.courier_id);
+      insert into public.notifications (company_id, user_id, type, title, message)
+        values (p_company, r.courier_id, 'shift_idle', 'Expediente encerrado',
+                'Seu expediente foi encerrado depois de ' || v_min || ' min sem atividade. Inicie de novo quando voltar.');
+      perform public.notify_company_managers(p_company, 'shift_idle', 'Expediente encerrado por inatividade',
+        'O expediente de ' || coalesce(r.courier_name, 'motoboy') || ' foi encerrado: ' || v_min || ' min sem atividade.');
+      perform public.log_event(p_company, 'expediente', 'warning', 'shift_idle_ended',
+        'Expediente de ' || coalesce(r.courier_name, 'motoboy') || ' encerrado após ' || v_min || ' min sem atividade',
+        'courier_shifts', r.id::text, null, jsonb_build_object('minutos', v_min));
+      n := n + 1;
+    else
+      update public.courier_shifts set paused = true, paused_reason = 'Sem atividade' where id = r.id;
+      perform public.release_planned_runs(r.courier_id);
+      insert into public.notifications (company_id, user_id, type, title, message)
+        values (p_company, r.courier_id, 'shift_idle', 'Você foi pausado',
+                'Você ficou ' || v_min || ' min sem atividade e parou de receber entregas. Toque em "Voltar a receber" quando estiver na loja.');
+      perform public.notify_company_managers(p_company, 'shift_idle', 'Motoboy pausado por inatividade',
+        coalesce(r.courier_name, 'Motoboy') || ' ficou ' || v_min || ' min sem atividade e foi pausado.');
+      perform public.log_event(p_company, 'expediente', 'warning', 'shift_idle_paused',
+        coalesce(r.courier_name, 'Motoboy') || ' pausado após ' || v_min || ' min sem atividade',
+        'courier_shifts', r.id::text, null, jsonb_build_object('minutos', v_min));
+      n := n + 1;
+    end if;
+  end loop;
+  perform set_config('app.log_actor', '', true);
+  return n;
+end;
+$$;
+revoke execute on function public.shift_idle_check(uuid) from public, anon, authenticated;
+
+create or replace function public.shift_idle_check_all()
+returns integer language plpgsql security definer set search_path = public as $$
+declare v uuid; n integer := 0;
+begin
+  for v in select id from public.companies where shift_idle_minutes > 0 and status = 'active' loop
+    begin
+      n := n + public.shift_idle_check(v);
+    exception when others then
+      raise warning 'Limite de expediente falhou na empresa %: %', v, sqlerrm;
+    end;
+  end loop;
+  return n;
+end;
+$$;
+revoke execute on function public.shift_idle_check_all() from public, anon, authenticated;
+
+-- As telas abertas (30 s) também conferem o limite antes de despachar.
+create or replace function public.auto_dispatch_tick()
+returns integer language plpgsql security definer as $$
+begin
+  if public.my_company_id() is null then return 0; end if;
+  begin
+    perform public.shift_idle_check(public.my_company_id());
+  exception when others then
+    raise warning 'Limite de expediente falhou: %', sqlerrm;
+  end;
+  return public.auto_dispatch(public.my_company_id());
+end;
+$$;
+grant execute on function public.auto_dispatch_tick() to authenticated;
+
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    begin
+      execute $c$select cron.schedule('shift-idle', '* * * * *', 'select public.shift_idle_check_all()')$c$;
+    exception when others then
+      raise notice 'pg_cron indisponível (%); o limite de expediente segue pelas telas abertas.', sqlerrm;
+    end;
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).

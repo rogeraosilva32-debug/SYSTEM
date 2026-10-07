@@ -175,6 +175,13 @@ await admin.locator('input[type=checkbox]').first().click();
 await admin.waitForTimeout(600);
 log('rota exata ligada pelo admin:', sql(`select strict_route_mode from companies where name='Empresa A'`));
 await admin.screenshot({ path: `${SHOTS}/10-ajustes.png`, fullPage: true });
+await expand(admin, 'Expediente parado');
+await admin.getByLabel('Limite sem atividade (min)').fill('60');
+await admin.getByRole('button', { name: 'Salvar limite' }).click();
+await admin.waitForTimeout(600);
+check('limite de expediente salvo', sql(`select shift_idle_minutes from companies where name='Empresa A'`) === '60');
+await admin.screenshot({ path: `${SHOTS}/10b-expediente-parado.png`, fullPage: true });
+sql(`update companies set shift_idle_minutes = 0 where name='Empresa A'`);
 
 console.log('\nERROS NO NAVEGADOR:', errors.length ? errors : 'nenhum');
 await browser.close();
