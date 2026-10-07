@@ -1,0 +1,11 @@
+// Publicação no Cloudflare (Workers com arquivos estáticos).
+// Build: npm run build · Deploy: npx wrangler deploy
+// Toda rota que não é arquivo abre o app (o React Router cuida do resto).
+{
+  "name": "system",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
