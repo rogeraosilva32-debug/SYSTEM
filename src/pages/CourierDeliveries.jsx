@@ -10,6 +10,7 @@ import DirectionsIcon from "@mui/icons-material/Directions";
 import NearMeIcon from "@mui/icons-material/NearMe";
 import PhoneIcon from "@mui/icons-material/Phone";
 import ReportProblemOutlinedIcon from "@mui/icons-material/ReportProblemOutlined";
+import StorefrontIcon from "@mui/icons-material/Storefront";
 import AppShell from "../components/AppShell";
 import supabase from "../services/supabase";
 import { logEvent } from "../services/eventLog";
@@ -167,6 +168,64 @@ function ShiftBar({ shift, unavailable, onChange, onError }) {
   );
 }
 
+// Depois da última entrega: rota de volta até a loja. A volta termina no
+// botão ou sozinha quando o GPS chega perto da loja.
+const BACK_AT_STORE_METERS = 80;
+function ReturnToStore({ run, store, myPos, onArrived, busy }) {
+  const [route, setRoute] = useState(null);
+  const from = useRef(null);
+  const auto = useRef(false);
+  useEffect(() => {
+    if (!store || !myPos || from.current) return;
+    from.current = myPos;
+    fetchRouteOptions(myPos, store).then((opts) => {
+      if (opts?.length) setRoute(opts[0]); else from.current = null;
+    });
+  }, [store, myPos]);
+  const near = store && myPos && distanceToPath(myPos, [[store.lat, store.lng]]) <= BACK_AT_STORE_METERS;
+  useEffect(() => {
+    if (near && !auto.current) { auto.current = true; onArrived(run.id, "gps"); }
+  }, [near, run.id, onArrived]);
+  const points = [];
+  if (myPos) points.push([myPos.lat, myPos.lng]);
+  if (store) points.push([store.lat, store.lng]);
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }} data-testid="voltando-loja">
+      <Alert severity="success" variant="outlined" sx={{ fontWeight: 700 }}>
+        Entregas da saída finalizadas. Volte para a loja.
+      </Alert>
+      {store && points.length > 0 && (
+        <Box sx={{ height: 280, borderRadius: "14px", overflow: "hidden", border: "1px solid #E7E5E4" }}>
+          <MapContainer center={points[0]} zoom={14} style={{ height: "100%", width: "100%" }}>
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" />
+            <FitBounds points={points} />
+            {route && <Polyline positions={route.path} pathOptions={{ color: ROUTE_COLORS[0], weight: 6, opacity: 0.9 }} />}
+            <Marker position={[store.lat, store.lng]} icon={storeIcon} />
+            {myPos && <Marker position={[myPos.lat, myPos.lng]} icon={meIcon} />}
+          </MapContainer>
+        </Box>
+      )}
+      {route && (
+        <Typography sx={{ fontSize: 13, fontWeight: 700, color: "#57534E" }}>
+          Até a loja: {Math.round(route.durationSeconds / 60)} min · {(route.distanceMeters / 1000).toFixed(1)} km
+        </Typography>
+      )}
+      {store && (
+        <Box sx={{ display: "flex", gap: 1 }}>
+          <Button fullWidth variant="outlined" startIcon={<DirectionsIcon />} sx={{ fontWeight: 700 }}
+            onClick={() => window.open(googleMapsUrl([store]), "_blank", "noopener,noreferrer")}>Google Maps</Button>
+          <Button fullWidth variant="outlined" startIcon={<NearMeIcon />} sx={{ fontWeight: 700 }}
+            onClick={() => window.open(wazeUrl(store), "_blank", "noopener,noreferrer")}>Waze</Button>
+        </Box>
+      )}
+      <Button variant="contained" size="large" startIcon={<StorefrontIcon />} sx={{ py: 1.3 }} disabled={busy}
+        onClick={() => onArrived(run.id, "courier")}>
+        Cheguei na loja
+      </Button>
+    </Box>
+  );
+}
+
 export default function CourierDeliveries() {
   const { profile } = useAuth();
   const [runs, setRuns] = useState(null);
@@ -183,21 +242,25 @@ export default function CourierDeliveries() {
   const [msg, setMsg] = useState(null);
   const [shift, setShift] = useState(undefined);
   const [shiftUnavailable, setShiftUnavailable] = useState(false);
+  const [returning, setReturning] = useState(null);
   const lastPing = useRef(0);
   const routeFrom = useRef(null);
   const offRef = useRef(false);
 
   const load = useCallback(async () => {
-    const [r, c, s] = await Promise.all([
+    const [r, c, s, back] = await Promise.all([
       supabase.from("delivery_runs").select("*, orders:delivery_orders(*)").eq("courier_id", profile.id)
         .in("status", ["planned", "in_progress"]).order("created_at"),
       supabase.rpc("my_company_settings").maybeSingle(),
       supabase.from("courier_shifts").select("id, started_at, paused, paused_reason").eq("courier_id", profile.id).is("ended_at", null).maybeSingle(),
+      supabase.rpc("returning_runs"),
     ]);
     // Falha de rede: mantém o expediente que já estava na tela.
     if (!s.error) setShift(s.data || null);
     setShiftUnavailable(Boolean(s.error));
     if (c.data) setCompany(c.data);
+    // Sem a função no banco (schema antigo) simplesmente não mostra a volta.
+    if (!back.error) setReturning((back.data || []).find((x) => x.courier_id === profile.id) || null);
     // Falha: mantém a saída que já estava na tela; a próxima recarga tenta de novo.
     if (r.error) { setRuns((prev) => prev ?? []); return; }
     setRuns((r.data || []).map((run) => ({ ...run, orders: (run.orders || []).sort((a, b) => a.stop_sequence - b.stop_sequence) })));
@@ -302,20 +365,33 @@ export default function CourierDeliveries() {
   }, [currentStop, myPos, strict, recalc, prevStop?.id, store?.lat, store?.lng]);
 
   // ── Desvio de rota ──────────────────────────────────────────────────────
+  // Só no modo rota exata o desvio vira alerta (para o motoboy e a empresa).
+  // Fora dele o motoboy pode ir pelo caminho que quiser: se ele se afastar
+  // da rota desenhada, ela é refeita a partir de onde ele está, sem aviso.
+  const lastRecalcAt = useRef(0);
   useEffect(() => {
     const path = options[choice]?.path;
     if (!activeRun || !myPos || !path) return;
     const limit = company?.off_route_meters || 250;
     const d = distanceToPath(myPos, path);
+    if (!strict) {
+      offRef.current = false;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setOffRoute(false);
+      if (d > limit && Date.now() - lastRecalcAt.current > 30000) {
+        lastRecalcAt.current = Date.now();
+        setRecalc((n) => n + 1);
+      }
+      return;
+    }
     const isOff = d > limit;
     if (isOff && !offRef.current) {
       supabase.rpc("notify_run_off_route", { p_run: activeRun.id, p_meters: Math.round(d) }).then(() => {});
       navigator.vibrate?.([300, 100, 300]);
     }
     offRef.current = isOff;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOffRoute(isOff);
-  }, [myPos, options, choice, activeRun, company?.off_route_meters]);
+  }, [myPos, options, choice, activeRun, strict, company?.off_route_meters]);
 
   const pickRoute = async (i) => {
     if (strict && i !== 0) return;
@@ -356,6 +432,14 @@ export default function CourierDeliveries() {
     }
   };
 
+  const arrived = useCallback(async (runId, by) => {
+    const { error } = await supabase.rpc("mark_back_at_store", { p_run: runId, p_by: by });
+    if (error) { setMsg({ type: "error", text: error.message }); return; }
+    setReturning(null);
+    setMsg({ type: "success", text: by === "gps" ? "Você chegou na loja." : "Chegada na loja registrada." });
+    load();
+  }, [load]);
+
   const mapPoints = [];
   if (myPos) mapPoints.push([myPos.lat, myPos.lng]);
   if (legOrigin) mapPoints.push([legOrigin.lat, legOrigin.lng]);
@@ -369,7 +453,11 @@ export default function CourierDeliveries() {
       {msg && <Alert severity={msg.type} sx={{ mb: 2 }} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       {geoError && <Alert severity="warning" sx={{ mb: 2 }}>{geoError}</Alert>}
 
-      {!activeRun && !plannedRun && (
+      {!activeRun && !plannedRun && returning && (
+        <ReturnToStore run={{ id: returning.run_id }} store={store} myPos={myPos} onArrived={arrived} busy={busy} />
+      )}
+
+      {!activeRun && !plannedRun && !returning && (
         <Box sx={{ py: 8, textAlign: "center", color: "#A8A29E", fontSize: 14 }}>{shift && !shift.paused ? "Aguardando pedidos. A próxima saída aparece aqui sozinha." : "Nenhuma entrega no momento. Você será avisado quando chegar uma saída."}</Box>
       )}
 
@@ -417,7 +505,7 @@ export default function CourierDeliveries() {
 
           {offRoute && (
             <Alert severity="error" variant="filled">
-              Você saiu do trajeto{strict ? " definido pela empresa" : " escolhido"}. A empresa foi avisada.
+              Você saiu do trajeto definido pela empresa. A empresa foi avisada.
             </Alert>
           )}
 

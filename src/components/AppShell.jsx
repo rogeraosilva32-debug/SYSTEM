@@ -19,6 +19,9 @@ import { useAuth } from "../context/AuthContext";
 import NotificationBell from "./NotificationBell";
 import { SupportBanner, PlatformNotices } from "./PlatformBanners";
 import { markFirstPageShown } from "./PageLoading";
+
+/* global __APP_VERSION__ */
+const APP_VERSION = typeof __APP_VERSION__ === "undefined" ? "dev" : __APP_VERSION__;
 import { pushSupported, subscribeToPush } from "../utils/pushNotifications";
 
 const ROLE_LABEL = {
@@ -188,7 +191,8 @@ export default function AppShell({ title, actions, children, nav }) {
           <Box sx={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
             <NavList items={menu.items} current={menu.current} onSelect={select} narrow={narrow} unread={unread} />
           </Box>
-          <Box sx={{ p: 1, borderTop: "1px solid #F5F5F4", display: "flex", justifyContent: narrow ? "center" : "flex-end" }}>
+          <Box sx={{ p: 1, borderTop: "1px solid #F5F5F4", display: "flex", alignItems: "center", justifyContent: narrow ? "center" : "space-between" }}>
+            {!narrow && <Typography sx={{ fontSize: 10.5, color: "#A8A29E", pl: 1 }} data-testid="versao">versão {APP_VERSION}</Typography>}
             <Tooltip title={narrow ? "Abrir menu" : "Recolher menu"} placement="right">
               <IconButton size="small" onClick={toggleNarrow} aria-label={narrow ? "Abrir menu" : "Recolher menu"}>
                 {narrow ? <ChevronRightIcon /> : <ChevronLeftIcon />}
@@ -202,6 +206,7 @@ export default function AppShell({ title, actions, children, nav }) {
         <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} slotProps={{ paper: { sx: { width: 270 } } }}>
           {brandBlock(false)}
           <NavList items={menu.items} current={menu.current} onSelect={select} narrow={false} unread={unread} />
+          <Typography sx={{ fontSize: 10.5, color: "#A8A29E", px: 2, py: 1.5, mt: "auto" }}>versão {APP_VERSION}</Typography>
         </Drawer>
       )}
 

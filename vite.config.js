@@ -1,9 +1,16 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { execSync } from 'node:child_process'
+
+// Versão que aparece no rodapé do menu: data do build + commit. Serve para
+// conferir no celular se a versão publicada já é a mais nova.
+const commit = (() => { try { return execSync('git rev-parse --short HEAD').toString().trim() } catch { return '' } })()
+const APP_VERSION = `${new Date().toISOString().slice(0, 10)}${commit ? ` · ${commit}` : ''}`
 
 // https://vite.dev/config/
 export default defineConfig({
+  define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
   plugins: [
     react(),
     VitePWA({

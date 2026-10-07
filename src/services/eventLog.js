@@ -176,12 +176,14 @@ export function startEventLog() {
 
   fetchMonitor.onProblem = (p) => {
     if (p.kind === "network" && navigator.onLine === false) return; // já contado como queda de internet
-    const message = p.kind === "http"
+    // O serviço vai na mensagem para dar para ver na lista qual chamada falhou.
+    const servico = (p.url || "").replace(/^https?:\/\/[^/]+/, "").split("?")[0].replace(/^\/rest\/v1\//, "").slice(0, 120);
+    const message = (p.kind === "http"
       ? `Servidor respondeu com erro ${p.status}`
-      : "Servidor não respondeu (o aparelho tinha internet)";
+      : "Servidor não respondeu (o aparelho tinha internet)") + (servico ? ` em ${servico}` : "");
     logEvent("rede", p.kind === "http" ? "server_error" : "server_unreachable", message, "warning",
-      { status: p.status, servico: (p.url || "").replace(/^https?:\/\/[^/]+/, "").split("?")[0].slice(0, 120) },
-      { key: `srv:${p.kind}:${p.status || ""}`, everyMs: 120000 });
+      { status: p.status, servico },
+      { key: `srv:${p.kind}:${p.status || ""}:${servico}`, everyMs: 120000 });
   };
 
   window.addEventListener("error", (e) => {

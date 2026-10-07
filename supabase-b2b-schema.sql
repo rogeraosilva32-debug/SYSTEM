@@ -4385,6 +4385,13 @@ begin
     elsif v_changes ? 'off_route_events' then
       v_action := 'off_route'; v_level := 'warning';
       v_msg := v_label || ' saiu da rota definida (' || coalesce(v_new ->> 'off_route_events', '?') || 'ª vez nesta saída)';
+    elsif v_changes ? 'returned_at' and v_new ->> 'returned_at' is not null then
+      v_action := 'run_returned';
+      v_msg := case v_new ->> 'returned_by'
+                 when 'auto' then 'Volta para a loja de ' || v_label || ' encerrada (nova saída ou fim do expediente)'
+                 when 'manager' then 'Gestor marcou que ' || v_label || ' chegou na loja'
+                 when 'gps' then v_label || ' chegou na loja (pelo GPS)'
+                 else v_label || ' chegou na loja' end;
     elsif v_changes ? 'locked' and (v_new ->> 'locked')::boolean then
       v_action := 'run_locked'; v_msg := 'Saída de ' || v_label || ' editada pelo gestor; o despacho automático não mexe mais nela';
     else
@@ -5261,6 +5268,121 @@ end;
 $$;
 revoke execute on function public.remove_collaborator(uuid) from public, anon;
 grant execute on function public.remove_collaborator(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- VOLTANDO PARA A LOJA e DESVIO SÓ NA ROTA EXATA (07/10/2026).
+-- Depois da última entrega a saída termina (o motoboy já pode receber a
+-- próxima), mas até chegar na loja ele aparece como "Voltando para a loja".
+-- A volta termina quando ele toca "Cheguei na loja", quando o GPS dele
+-- chega perto da loja, quando o gestor marca, ou sozinha quando ele inicia
+-- outra saída ou encerra o expediente.
+-- Desvio de rota só é registrado/avisado em saída com rota exata.
+-- ---------------------------------------------------------------------
+alter table public.delivery_runs add column if not exists returned_at timestamptz;
+alter table public.delivery_runs add column if not exists returned_by text;
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'delivery_runs_returned_by_check') then
+    alter table public.delivery_runs add constraint delivery_runs_returned_by_check
+      check (returned_by is null or returned_by in ('courier', 'gps', 'manager', 'auto'));
+  end if;
+end $$;
+-- Saídas antigas: ninguém está "voltando" delas.
+do $$
+begin
+  if not exists (select 1 from public.schema_flags where name = 'runs_returned_backfill') then
+    update public.delivery_runs set returned_at = coalesce(finished_at, now()), returned_by = 'auto'
+     where status in ('finished', 'cancelled') and returned_at is null;
+    insert into public.schema_flags (name) values ('runs_returned_backfill');
+  end if;
+end $$;
+-- Saída cancelada não tem volta.
+create or replace function public.run_cancel_no_return()
+returns trigger language plpgsql as $$
+begin
+  if new.status = 'cancelled' and new.returned_at is null then
+    new.returned_at := now(); new.returned_by := 'auto';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_run_cancel_no_return on public.delivery_runs;
+create trigger trg_run_cancel_no_return before update of status on public.delivery_runs
+  for each row when (new.status = 'cancelled') execute function public.run_cancel_no_return();
+
+-- Motoboys voltando para a loja agora (RLS: gestor vê a empresa; motoboy, as dele).
+create or replace function public.returning_runs()
+returns table (run_id uuid, courier_id uuid, finished_at timestamptz)
+language sql stable as $$
+  select r.id, r.courier_id, r.finished_at
+    from public.delivery_runs r
+   where r.status = 'finished' and r.returned_at is null
+     and r.finished_at > now() - interval '3 hours'
+     and not exists (select 1 from public.delivery_runs x
+                      where x.courier_id = r.courier_id and x.status in ('planned', 'in_progress'))
+$$;
+grant execute on function public.returning_runs() to authenticated;
+
+-- Fecha a volta: o próprio motoboy (botão ou GPS) ou o gestor da empresa.
+create or replace function public.mark_back_at_store(p_run uuid, p_by text default 'courier')
+returns void language plpgsql security definer as $$
+declare v_run record; v_by text;
+begin
+  select * into v_run from public.delivery_runs where id = p_run for update;
+  if v_run.id is null then raise exception 'Saída não encontrada.'; end if;
+  if v_run.courier_id = auth.uid() then
+    v_by := case when p_by = 'gps' then 'gps' else 'courier' end;
+  elsif public.is_order_manager() and v_run.company_id = public.my_company_id() then
+    v_by := 'manager';
+  else
+    raise exception 'Sem permissão.';
+  end if;
+  if v_run.status <> 'finished' or v_run.returned_at is not null then return; end if;
+  update public.delivery_runs set returned_at = now(), returned_by = v_by where id = p_run;
+end;
+$$;
+grant execute on function public.mark_back_at_store(uuid, text) to authenticated;
+
+-- Nova saída iniciada ou expediente encerrado: a volta anterior acabou.
+create or replace function public.close_pending_returns()
+returns trigger language plpgsql security definer as $$
+begin
+  update public.delivery_runs set returned_at = now(), returned_by = 'auto'
+   where courier_id = new.courier_id and status = 'finished' and returned_at is null
+     and (tg_table_name <> 'delivery_runs' or id <> new.id);
+  return new;
+end;
+$$;
+drop trigger if exists trg_run_start_closes_return on public.delivery_runs;
+create trigger trg_run_start_closes_return after update of status on public.delivery_runs
+  for each row when (new.status = 'in_progress' and old.status is distinct from new.status)
+  execute function public.close_pending_returns();
+drop trigger if exists trg_shift_end_closes_return on public.courier_shifts;
+create trigger trg_shift_end_closes_return after update of ended_at on public.courier_shifts
+  for each row when (new.ended_at is not null and old.ended_at is null)
+  execute function public.close_pending_returns();
+
+-- Desvio de rota: só conta e avisa em saída com rota exata.
+create or replace function public.notify_run_off_route(p_run uuid, p_meters integer default null)
+returns void language plpgsql security definer as $$
+declare v_run record;
+begin
+  select r.*, p.name as courier_name into v_run
+    from public.delivery_runs r join public.profiles p on p.id = r.courier_id
+    where r.id = p_run and r.courier_id = auth.uid() and r.status = 'in_progress';
+  if v_run.id is null then raise exception 'Saída não encontrada.'; end if;
+  if not v_run.strict_route then return; end if;
+  if v_run.last_off_route_at is not null and v_run.last_off_route_at > now() - interval '5 minutes' then
+    return;
+  end if;
+  update public.delivery_runs set last_off_route_at = now(), off_route_events = off_route_events + 1
+    where id = p_run;
+  perform public.notify_company_managers(v_run.company_id, 'off_route',
+    'Desvio de rota (rota exata)',
+    v_run.courier_name || ' saiu do trajeto' || coalesce(' (' || p_meters || ' m)', '') || '.');
+end;
+$$;
+grant execute on function public.notify_run_off_route(uuid, integer) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- SEGURANÇA — acesso anônimo fechado por padrão (06/10/2026).

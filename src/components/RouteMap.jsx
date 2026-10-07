@@ -117,6 +117,7 @@ export default function RouteMap({
   assignmentId = null,
   mapHeight = 340,
   origin = null, // {lat, lng} fixo (ex.: a loja) quando não há posição de ninguém
+  checkOffRoute = true, // false: não acusa desvio (entregas fora do modo rota exata)
 }) {
   const [myPos, setMyPos] = useState(null);
   const [geoError, setGeoError] = useState("");
@@ -247,7 +248,7 @@ export default function RouteMap({
 
   // ── Detecção de desvio de rota ────────────────────────────────────────────
   useEffect(() => {
-    if (!otherPos || !route?.path?.length) {
+    if (!checkOffRoute || !otherPos || !route?.path?.length) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setOffRoute(false);
       hasNotifiedOffRoute.current = false;
@@ -268,7 +269,7 @@ export default function RouteMap({
     if (!isOff) {
       hasNotifiedOffRoute.current = false;
     }
-  }, [otherPos, route, broadcastMyLocation, assignmentId]);
+  }, [otherPos, route, broadcastMyLocation, assignmentId, checkOffRoute]);
 
   if (!lat || !lng) {
     return (

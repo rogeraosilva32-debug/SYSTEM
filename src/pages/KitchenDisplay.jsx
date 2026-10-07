@@ -8,6 +8,7 @@ import SettingsIcon from "@mui/icons-material/SettingsOutlined";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import supabase from "../services/supabase";
+import MotoboyIcon from "../components/MotoboyIcon";
 import { setKitchenToken } from "../services/eventLog";
 
 // Modo cozinha: tela cheia com a fila de preparo, para deixar numa TV ou
@@ -58,7 +59,7 @@ function OrderCard({ order, now, showButtons, onAdvance, busy }) {
       <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.2 }}>
         <Typography sx={{ fontSize: "clamp(26px, 3.2vw, 44px)", fontWeight: 900, color: "#fff", lineHeight: 1 }}>#{order.number}</Typography>
         <Typography sx={{ fontSize: "clamp(13px, 1.3vw, 18px)", fontWeight: 800, color: order.order_type === "local" ? "#C4B5FD" : "#93C5FD" }}>
-          {order.order_type === "local" ? "🏪 LOCAL" : "🛵 ENTREGA"}
+          {order.order_type === "local" ? "🏪 LOCAL" : <><MotoboyIcon light /> ENTREGA</>}
         </Typography>
         <Typography sx={{ ml: "auto", fontSize: "clamp(18px, 2vw, 28px)", fontWeight: 900, color: waitColor(min) }}>{min} min</Typography>
       </Box>
