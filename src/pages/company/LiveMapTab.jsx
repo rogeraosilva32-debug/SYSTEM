@@ -4,7 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet"
 import L from "leaflet";
 import supabase from "../../services/supabase";
 import { useAuth } from "../../context/AuthContext";
-import { orderAddress } from "../../utils/delivery";
+import { orderAddress, storePresence } from "../../utils/delivery";
 import { fetchMultiStopRoute } from "../../utils/geocoding";
 import { useCompanySettings } from "../../hooks/useCompanySettings";
 import PageLoading from "../../components/PageLoading";
@@ -156,7 +156,7 @@ export function LiveMapTab() {
             <Box key={c.id} sx={{ p: 1.2, mb: 1, border: "1px solid #E7E5E4", borderRadius: "12px", background: "#fff" }}>
               <Typography sx={{ fontWeight: 700, fontSize: 13.5 }}>{c.name}</Typography>
               <Typography sx={{ fontSize: 12, color: run ? "#4F5BA6" : back ? "#7A5512" : "#A8A29E", fontWeight: 600 }}>
-                {run ? `Em rota · ${pending} parada(s) restante(s)` : back ? "Voltando para a loja" : "Livre"} · {timeAgo(c.last_location_at)}
+                {run ? `Em rota · ${pending} parada(s) restante(s)` : back ? "Voltando para a loja" : `Livre${storePresence(c, store) ? ` · ${storePresence(c, store)}` : ""}`} · {timeAgo(c.last_location_at)}
               </Typography>
             </Box>
           );

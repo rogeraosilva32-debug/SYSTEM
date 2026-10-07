@@ -4,10 +4,8 @@ import AppShell from "../components/AppShell";
 import ReceiptLongOutlinedIcon from "@mui/icons-material/ReceiptLongOutlined";
 import MapOutlinedIcon from "@mui/icons-material/MapOutlined";
 import GroupOutlinedIcon from "@mui/icons-material/GroupOutlined";
-import EventNoteOutlinedIcon from "@mui/icons-material/EventNoteOutlined";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlineOutlined";
 import useTab from "../hooks/useTab";
-import { AssignmentsTab } from "./company/AssignmentsTab";
 import { MessagesTab } from "./company/MessagesTab";
 import { OrdersTab } from "./company/OrdersTab";
 import { LiveMapTab } from "./company/LiveMapTab";
@@ -20,7 +18,6 @@ const TABS = [
   { key: "live", label: "Mapa ao vivo", icon: <MapOutlinedIcon /> },
   { key: "messages", label: "Mensagens", icon: <ChatBubbleOutlineIcon />, unread: true },
   { key: "team", label: "Minha equipe", icon: <GroupOutlinedIcon /> },
-  { key: "assignments", label: "Designações", icon: <EventNoteOutlinedIcon /> },
 ];
 
 // Um supervisor enxerga só os colaboradores atribuídos a ele — a tabela de
@@ -62,7 +59,6 @@ export default function SupervisorDashboard() {
       {tab === "orders" && <OrdersTab />}
       {tab === "live" && <LiveMapTab />}
       {tab === "team" && <MyTeam myId={profile.id} />}
-      {tab === "assignments" && <AssignmentsTab />}
       {tab === "messages" && <MessagesTab />}
     </AppShell>
   );

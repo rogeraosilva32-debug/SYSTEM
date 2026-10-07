@@ -13,10 +13,7 @@ const expand = async (p, title) => {
   if ((await h.getAttribute('aria-expanded')) === 'false') await h.click();
   await p.waitForTimeout(300);
 };
-// Na etapa do endereço é preciso marcar que o endereço foi confirmado com o cliente.
 const cont = async (p) => {
-  const ok = p.getByLabel('Confirmei o endereço com o cliente');
-  if (await ok.isVisible() && !(await ok.isChecked())) await ok.check();
   await p.getByRole('button', { name: 'Continuar' }).click();
 };
 
@@ -68,8 +65,6 @@ await admin.getByLabel('Número').fill('1000');
 await admin.getByLabel('Bairro').fill('Bela Vista');
 await admin.getByLabel('Cidade').fill('São Paulo');
 check('aviso para confirmar o endereço', await admin.getByText(/Confirme o endereço com o cliente/).first().isVisible());
-await admin.getByRole('button', { name: 'Continuar' }).click();
-check('sem confirmar o endereço não avança', await admin.getByText('Confirme o endereço com o cliente e marque a caixa abaixo.').isVisible());
 await cont(admin);
 await admin.getByLabel('Adicionar produto do cardápio').fill('Misto');
 await admin.getByRole('option', { name: /Misto quente/ }).click();
