@@ -4,6 +4,12 @@
   command = "npm run build"
   publish = "dist"
 
+# A URL e a chave anon do Supabase são públicas (vão no app e no
+# .env.production); a verificação de segredos do Netlify não deve barrar.
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY,VITE_VAPID_PUBLIC_KEY"
+  SECRETS_SCAN_OMIT_PATHS = ".env.production"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
