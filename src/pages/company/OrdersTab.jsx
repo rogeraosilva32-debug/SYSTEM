@@ -172,7 +172,7 @@ function SummaryLine({ label, value, strong, muted }) {
   return (
     <Box sx={{ display: "flex", justifyContent: "space-between", fontSize: strong ? 15 : 13 }}>
       <Typography sx={{ fontSize: "inherit", fontWeight: strong ? 800 : 500, color: muted ? "#A8A29E" : "#44403C" }}>{label}</Typography>
-      <Typography sx={{ fontSize: "inherit", fontWeight: strong ? 800 : 600, color: muted ? "#A8A29E" : "#1C1917" }}>{value}</Typography>
+      <Typography sx={{ fontSize: "inherit", fontWeight: strong ? 800 : 600, color: muted ? "#A8A29E" : "#1F2933" }}>{value}</Typography>
     </Box>
   );
 }
@@ -845,7 +845,7 @@ function ShiftPanel({ shifts, couriers, runs, returning = [], store, onChanged }
           const where = run?.status === "in_progress" || back ? null : storePresence(courier, store);
           const state = (sh.paused ? "Em pausa" : run ? (run.status === "planned" ? "Saída aguardando" : "Em rota") : back ? "Voltando para a loja" : "Livre")
             + (where ? ` · ${where}` : "");
-          const color = sh.paused ? "#B0793D" : run ? "#4F5BA6" : back ? "#7A5512" : "#4B7A5E";
+          const color = sh.paused ? "#B0793D" : run ? "#C2470A" : back ? "#7A5512" : "#4B7A5E";
           return (
             <Box key={sh.id} sx={{ display: "flex", alignItems: "center", gap: 1, px: 1.2, py: 0.6, border: "1px solid #E7E5E4", borderRadius: "10px", background: "#fff" }}>
               <Box>
@@ -1056,12 +1056,12 @@ export function OrdersTab() {
                 {isLocal(o) ? "🏪 Pedido local" : o.address_neighborhood || "Sem bairro"} · {money(o.total)}
               </Typography>
               {o.run_id && col !== "ready" && (
-                <Typography sx={{ fontSize: 11, color: "#4F5BA6", fontWeight: 700, flexShrink: 0, maxWidth: "50%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <Typography sx={{ fontSize: 11, color: "#C2470A", fontWeight: 700, flexShrink: 0, maxWidth: "50%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   <MotoboyIcon /> {o.courier?.name}
                 </Typography>
               )}
               {o.run_id && col === "ready" && (
-                <Typography sx={{ fontSize: 10.5, color: "#4F5BA6", fontWeight: 800, flexShrink: 0 }}>parada {o.stop_sequence}</Typography>
+                <Typography sx={{ fontSize: 10.5, color: "#C2470A", fontWeight: 800, flexShrink: 0 }}>parada {o.stop_sequence}</Typography>
               )}
             </Box>
           </Box>
@@ -1095,7 +1095,7 @@ export function OrdersTab() {
                   {col !== "ready" && list.map((o) => card(o, col))}
                   {col === "ready" && blocks.map((b) => b.order ? card(b.order, col, b.pos) : (
                     <Box key={b.run} sx={{ border: "1px dashed #C9CDEB", background: "#EEF0FA", borderRadius: "12px", p: 0.8, pb: 0.1, mb: 1 }}>
-                      <Typography sx={{ fontSize: 11.5, fontWeight: 800, color: "#4F5BA6", px: 0.4, mb: 0.2 }}><MotoboyIcon /> {b.courier || "Motoboy"}</Typography>
+                      <Typography sx={{ fontSize: 11.5, fontWeight: 800, color: "#C2470A", px: 0.4, mb: 0.2 }}><MotoboyIcon /> {b.courier || "Motoboy"}</Typography>
                       <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 0.4, mb: 0.6 }}>
                         <Typography sx={{ fontSize: 10.5, color: "#6B72A8", flex: 1 }}>Aguardando o motoboy confirmar a saída</Typography>
                         <Button size="small" sx={{ minWidth: 0, py: 0, fontSize: 11 }}

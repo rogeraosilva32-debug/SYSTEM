@@ -243,9 +243,9 @@ export default function SystemLog({ companyId = null }) {
     <Chip key={label} label={label} size="small" onClick={onClick} clickable
       sx={{
         height: 26, fontSize: 12, fontWeight: 700,
-        background: active ? (color || "#1C1917") : "#F5F5F4",
+        background: active ? (color || "#1F2933") : "#F5F5F4",
         color: active ? "#fff" : "#57534E",
-        "&:hover": { background: active ? (color || "#1C1917") : "#E7E5E4" },
+        "&:hover": { background: active ? (color || "#1F2933") : "#E7E5E4" },
       }} />
   );
 
@@ -308,7 +308,7 @@ export default function SystemLog({ companyId = null }) {
                   gap: { xs: 0.2, md: 0 }, px: 1.5, py: 0.7, cursor: "pointer",
                   borderTop: "1px solid #F5F5F4", fontFamily: mono, fontSize: 12.5,
                   background: fresh.has(e.id) ? "#F0F7F2" : (e.level === "info" ? "#fff" : lv.bg),
-                  color: e.level === "critical" ? "#B0463D" : e.level === "info" ? "#1C1917" : lv.fg,
+                  color: e.level === "critical" ? "#B0463D" : e.level === "info" ? "#1F2933" : lv.fg,
                   fontWeight: e.level === "critical" ? 800 : 400,
                   transition: "background 1.5s",
                   "&:hover": { background: "#FAFAF9" },

@@ -6,7 +6,7 @@ export const ORDER_STATUS = {
   received: { label: "Recebido", bg: "#F5F5F4", fg: "#57534E" },
   preparing: { label: "Em preparo", bg: "#FBF3EA", fg: "#B0793D" },
   ready: { label: "Pronto", bg: "#EEF2F6", fg: "#4A6C8C" },
-  on_route: { label: "Em rota", bg: "#EEF0FA", fg: "#4F5BA6" },
+  on_route: { label: "Em rota", bg: "#FFF1E8", fg: "#C2470A" },
   delivered: { label: "Entregue", bg: "#EEF3EF", fg: "#4B7A5E" },
   problem: { label: "Problema", bg: "#F6EBEA", fg: "#B0463D" },
   cancelled: { label: "Cancelado", bg: "#F5F5F4", fg: "#A8A29E" },
@@ -168,7 +168,7 @@ export async function fetchRouteOptions(from, to) {
   }
 }
 
-export const ROUTE_COLORS = ["#1C1917", "#4F5BA6", "#B0793D"];
+export const ROUTE_COLORS = ["#FF6B1A", "#1F2933", "#7B8794"];
 export const ROUTE_NAMES = ["Principal (mais rápida)", "Alternativa 1", "Alternativa 2"];
 
 // Motoboy na loja ou fora, pela última posição enviada pelo celular dele

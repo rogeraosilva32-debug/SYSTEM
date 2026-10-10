@@ -35,7 +35,7 @@ export function PeriodPicker({ value, onChange }) {
 }
 
 export function Stat({ label, value, hint, tone }) {
-  const color = { good: "#4B7A5E", bad: "#B0463D", warn: "#B0793D" }[tone] || "#1C1917";
+  const color = { good: "#4B7A5E", bad: "#B0463D", warn: "#B0793D" }[tone] || "#1F2933";
   return (
     <Box sx={{ p: 2, border: "1px solid #E7E5E4", borderRadius: "14px", background: "#fff", breakInside: "avoid" }}>
       <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#78716C" }}>{label}</Typography>
@@ -94,7 +94,7 @@ export function BarList({ rows, format = (v) => v, empty = "Sem dados no períod
         <Box key={r.label} sx={{ display: "grid", gridTemplateColumns: { xs: "110px 1fr 90px", sm: "160px 1fr 120px" }, gap: 1, alignItems: "center" }}>
           <Typography sx={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</Typography>
           <Box sx={{ height: 10, borderRadius: 5, background: "#F5F5F4", overflow: "hidden" }}>
-            <Box sx={{ height: "100%", width: `${(100 * (Number(r.value) || 0)) / max}%`, background: "#4F5BA6", borderRadius: 5 }} />
+            <Box sx={{ height: "100%", width: `${(100 * (Number(r.value) || 0)) / max}%`, background: "#FF6B1A", borderRadius: 5 }} />
           </Box>
           <Typography sx={{ fontSize: 12.5, textAlign: "right" }}>
             {format(r.value)}{r.extra ? <span style={{ color: "#A8A29E" }}> · {r.extra}</span> : null}
@@ -114,7 +114,7 @@ export function DayBars({ rows, format }) {
       {rows.map((r) => (
         <Box key={r.label} title={`${r.label}: ${format(r.value)}`}
           sx={{ flex: "1 0 18px", maxWidth: 48, display: "flex", flexDirection: "column", alignItems: "center", height: "100%", justifyContent: "flex-end" }}>
-          <Box sx={{ width: "100%", height: `${(100 * (Number(r.value) || 0)) / max}%`, minHeight: 2, background: "#4F5BA6", borderRadius: "4px 4px 0 0" }} />
+          <Box sx={{ width: "100%", height: `${(100 * (Number(r.value) || 0)) / max}%`, minHeight: 2, background: "#FF6B1A", borderRadius: "4px 4px 0 0" }} />
           <Typography sx={{ fontSize: 9.5, color: "#78716C", mt: 0.5, whiteSpace: "nowrap" }}>{r.label.slice(0, 5)}</Typography>
         </Box>
       ))}

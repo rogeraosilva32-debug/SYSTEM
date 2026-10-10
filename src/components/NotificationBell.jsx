@@ -114,7 +114,7 @@ export default function NotificationBell() {
             >
               <Box sx={{ mt: 0.2 }}>{ICON_BY_TYPE[n.type] || <NotificationsIcon sx={{ fontSize: 18 }} />}</Box>
               <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Typography sx={{ fontSize: 13, fontWeight: n.read ? 600 : 800, color: "#1C1917" }}>{n.title}</Typography>
+                <Typography sx={{ fontSize: 13, fontWeight: n.read ? 600 : 800, color: "#1F2933" }}>{n.title}</Typography>
                 <Typography sx={{ fontSize: 12, color: "#78716C", mt: 0.1 }}>{n.message}</Typography>
                 <Typography sx={{ fontSize: 10.5, color: "#A8A29E", mt: 0.3 }}>{timeAgo(n.created_at)}</Typography>
               </Box>

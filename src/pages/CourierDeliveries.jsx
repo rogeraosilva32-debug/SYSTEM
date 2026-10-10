@@ -27,17 +27,17 @@ const PROBLEMS = ["Cliente não atende", "Endereço não encontrado", "Cliente r
 
 const meIcon = new L.DivIcon({
   className: "",
-  html: `<div style="width:16px;height:16px;border-radius:50%;background:#4F5BA6;border:3px solid #fff;box-shadow:0 0 8px rgba(79,91,166,.6);transform:translate(-8px,-8px)"></div>`,
+  html: `<div style="width:16px;height:16px;border-radius:50%;background:#1F2933;border:3px solid #fff;box-shadow:0 0 0 2px #FF6B1A,0 0 8px rgba(255,107,26,.5);transform:translate(-8px,-8px)"></div>`,
   iconSize: [0, 0],
 });
 const storeIcon = new L.DivIcon({
   className: "",
-  html: `<div style="transform:translate(-11px,-11px);width:22px;height:22px;border-radius:6px;background:#1C1917;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
+  html: `<div style="transform:translate(-11px,-11px);width:22px;height:22px;border-radius:6px;background:#1F2933;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
   iconSize: [0, 0],
 });
 const numberIcon = (n) => new L.DivIcon({
   className: "",
-  html: `<div style="width:22px;height:22px;border-radius:50%;background:#B0463D;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;transform:translate(-11px,-11px);border:2px solid #fff">${n}</div>`,
+  html: `<div style="width:22px;height:22px;border-radius:50%;background:#FF6B1A;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;transform:translate(-11px,-11px);border:2px solid #fff">${n}</div>`,
   iconSize: [0, 0],
 });
 
@@ -60,7 +60,7 @@ function RunOverview({ store, orders }) {
         <MapContainer center={points[0]} zoom={13} style={{ height: "100%", width: "100%" }}>
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" />
           <FitBounds points={route?.path?.length ? [points[0], ...points.slice(1), route.path[Math.floor(route.path.length / 2)]] : points} />
-          {route && <Polyline positions={route.path} pathOptions={{ color: "#1C1917", weight: 5, opacity: 0.85 }} />}
+          {route && <Polyline positions={route.path} pathOptions={{ color: "#FF6B1A", weight: 5, opacity: 0.9 }} />}
           {store && <Marker position={[store.lat, store.lng]} icon={storeIcon} />}
           {stops.map((o) => <Marker key={o.id} position={[o.lat, o.lng]} icon={numberIcon(o.stop_sequence)} />)}
         </MapContainer>
@@ -77,7 +77,7 @@ function RunOverview({ store, orders }) {
 
 const destIcon = new L.DivIcon({
   className: "",
-  html: `<div style="width:18px;height:18px;border-radius:50%;background:#1C1917;border:3px solid #fff;box-shadow:0 0 0 2px #1C1917;transform:translate(-9px,-9px)"></div>`,
+  html: `<div style="width:18px;height:18px;border-radius:50%;background:#FF6B1A;border:3px solid #fff;box-shadow:0 0 0 2px #FF6B1A;transform:translate(-9px,-9px)"></div>`,
   iconSize: [0, 0],
 });
 
@@ -142,7 +142,7 @@ function ShiftBar({ shift, unavailable, onChange, onError }) {
       background: on ? "#EEF0FA" : shift ? "#FBF3EA" : "#fff" }}>
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, flexWrap: "wrap" }}>
         <Box>
-          <Typography sx={{ fontSize: 13.5, fontWeight: 700, color: on ? "#4F5BA6" : shift ? "#B0793D" : "#57534E" }}>
+          <Typography sx={{ fontSize: 13.5, fontWeight: 700, color: on ? "#C2470A" : shift ? "#B0793D" : "#57534E" }}>
             {!shift ? "Fora do expediente" : shift.paused ? "Em pausa: não recebe novas saídas" : `Em expediente desde ${since}`}
           </Typography>
           {shift?.paused && shift.paused_reason && <Typography sx={{ fontSize: 11.5, color: "#78716C" }}>{shift.paused_reason}</Typography>}

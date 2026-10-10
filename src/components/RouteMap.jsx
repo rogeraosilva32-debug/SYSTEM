@@ -8,21 +8,21 @@ import { fetchRoute } from "../utils/geocoding";
 
 const destIcon = new L.DivIcon({
   className: "",
-  html: `<div style="width:16px;height:16px;border-radius:50%;background:#1C1917;border:3px solid #fff;box-shadow:0 0 0 2px #1C1917;"></div>`,
+  html: `<div style="width:16px;height:16px;border-radius:50%;background:#FF6B1A;border:3px solid #fff;box-shadow:0 0 0 2px #FF6B1A;"></div>`,
   iconSize: [16, 16],
   iconAnchor: [8, 8],
 });
 
 const storeIcon = new L.DivIcon({
   className: "",
-  html: `<div style="width:20px;height:20px;border-radius:6px;background:#1C1917;color:#fff;font:700 11px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
+  html: `<div style="width:20px;height:20px;border-radius:6px;background:#1F2933;color:#fff;font:700 11px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
   iconSize: [20, 20],
   iconAnchor: [10, 10],
 });
 
 const meIcon = new L.DivIcon({
   className: "",
-  html: `<div style="width:14px;height:14px;border-radius:50%;background:#4A6C8C;border:3px solid #fff;box-shadow:0 0 8px rgba(74,108,140,0.5);"></div>`,
+  html: `<div style="width:14px;height:14px;border-radius:50%;background:#1F2933;border:3px solid #fff;box-shadow:0 0 0 2px #FF6B1A,0 0 8px rgba(255,107,26,.5);"></div>`,
   iconSize: [14, 14],
   iconAnchor: [7, 7],
 });
@@ -295,7 +295,7 @@ export default function RouteMap({
           {!otherPos && fromPos && (
             <>
               <Marker position={[fromPos.lat, fromPos.lng]} icon={storeIcon}><Popup>Loja</Popup></Marker>
-              {route && <Polyline positions={route.path} pathOptions={{ color: "#292524", weight: 4, opacity: 0.85 }} />}
+              {route && <Polyline positions={route.path} pathOptions={{ color: "#FF6B1A", weight: 4, opacity: 0.9 }} />}
             </>
           )}
           {otherPos && (
@@ -304,7 +304,7 @@ export default function RouteMap({
                 <Popup>{myPos ? "Você" : `Colaborador · visto ${timeAgo(trackedPos?.at)}`}</Popup>
               </Marker>
               {route ? (
-                <Polyline positions={route.path} pathOptions={{ color: offRoute ? "#B0463D" : "#292524", weight: 4, opacity: 0.85 }} />
+                <Polyline positions={route.path} pathOptions={{ color: offRoute ? "#B0463D" : "#FF6B1A", weight: 4, opacity: 0.9 }} />
               ) : (
                 <Polyline positions={[[otherPos.lat, otherPos.lng], [lat, lng]]} pathOptions={{ color: "#A8A29E", dashArray: "6 6", weight: 2 }} />
               )}
@@ -325,7 +325,7 @@ export default function RouteMap({
             {address}
           </Typography>
           {route && (
-            <Typography sx={{ fontSize: 11, color: "#292524", fontWeight: 700, mt: 0.2 }}>
+            <Typography sx={{ fontSize: 11, color: "#2B3642", fontWeight: 700, mt: 0.2 }}>
               {Math.round(route.durationSeconds / 60)} min · {(route.distanceMeters / 1000).toFixed(1)} km
             </Typography>
           )}

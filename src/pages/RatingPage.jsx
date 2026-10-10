@@ -59,7 +59,7 @@ export default function RatingPage() {
 
           {context && !done && (
             <>
-              <Typography sx={{ fontWeight: 800, fontSize: 19, color: "#1C1917", mb: 0.5 }}>
+              <Typography sx={{ fontWeight: 800, fontSize: 19, color: "#1F2933", mb: 0.5 }}>
                 Como foi o atendimento?
               </Typography>
               <Typography sx={{ fontSize: 13, color: "#78716C", mb: 3 }}>

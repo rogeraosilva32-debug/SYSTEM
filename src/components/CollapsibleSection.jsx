@@ -61,7 +61,7 @@ export function MoreOptions({ label = "opções avançadas", children, defaultOp
         sx={{
           border: 0, background: "none", p: 0, cursor: "pointer", font: "inherit",
           fontSize: 13, fontWeight: 700, color: "#57534E", display: "inline-flex", alignItems: "center", gap: 0.3,
-          "&:hover": { color: "#1C1917" },
+          "&:hover": { color: "#1F2933" },
         }}>
         <ExpandMoreIcon sx={{ fontSize: 18, transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
         {open ? `Esconder ${label}` : `Mostrar ${label}`}
