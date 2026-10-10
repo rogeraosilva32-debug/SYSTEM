@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import supabase from "../services/supabase";
 import { logEvent } from "../services/eventLog";
 import { Box, Button, TextField, Typography, CircularProgress, Container } from "@mui/material";
+import GorapLogo from "../components/GorapLogo";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -87,8 +88,9 @@ export default function Login() {
     return (
       <Box sx={{ minHeight: "100vh", background: "#FAFAF9", display: "flex", alignItems: "center" }}>
         <Container maxWidth="xs">
+          <Box sx={{ display: "flex", justifyContent: "center", mb: 3 }}><GorapLogo height={40} /></Box>
           <Box sx={{ background: "#fff", border: "1px solid #E7E5E4", borderRadius: "16px", p: 4 }}>
-            <Typography sx={{ fontWeight: 800, fontSize: 20, color: "#1C1917", mb: 0.5 }}>Recuperar senha</Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: 20, color: "#1F2933", mb: 0.5 }}>Recuperar senha</Typography>
             <Typography sx={{ fontSize: 13, color: "#78716C", mb: 3 }}>
               Informe seu e-mail e enviaremos um link pra criar uma senha nova.
             </Typography>
@@ -124,8 +126,9 @@ export default function Login() {
   return (
     <Box sx={{ minHeight: "100vh", background: "#FAFAF9", display: "flex", alignItems: "center" }}>
       <Container maxWidth="xs">
+        <Box sx={{ display: "flex", justifyContent: "center", mb: 3 }}><GorapLogo height={40} /></Box>
         <Box sx={{ background: "#fff", border: "1px solid #E7E5E4", borderRadius: "16px", p: 4 }}>
-          <Typography sx={{ fontWeight: 800, fontSize: 22, color: "#1C1917", letterSpacing: "-0.02em", mb: 0.5 }}>
+          <Typography sx={{ fontWeight: 800, fontSize: 22, color: "#1F2933", letterSpacing: "-0.02em", mb: 0.5 }}>
             {mode === "login" ? "Entrar" : "Criar conta"}
           </Typography>
           <Typography sx={{ fontSize: 13.5, color: "#78716C", mb: 3 }}>
@@ -142,7 +145,7 @@ export default function Login() {
             {mode === "login" && (
               <Typography
                 onClick={() => { setMode("forgot"); setForgotEmail(email); }}
-                sx={{ alignSelf: "flex-end", fontSize: 12.5, fontWeight: 600, color: "#78716C", cursor: "pointer", "&:hover": { color: "#1C1917" } }}
+                sx={{ alignSelf: "flex-end", fontSize: 12.5, fontWeight: 600, color: "#78716C", cursor: "pointer", "&:hover": { color: "#1F2933" } }}
               >
                 Esqueci minha senha
               </Typography>
@@ -177,7 +180,7 @@ export default function Login() {
             sx={{ textAlign: "center", mt: 3, fontSize: 13, color: "#78716C", cursor: "pointer" }}
           >
             {mode === "login" ? "Não tem conta? " : "Já tem conta? "}
-            <Box component="span" sx={{ color: "#1C1917", fontWeight: 700 }}>
+            <Box component="span" sx={{ color: "#1F2933", fontWeight: 700 }}>
               {mode === "login" ? "Criar conta" : "Entrar"}
             </Box>
           </Typography>

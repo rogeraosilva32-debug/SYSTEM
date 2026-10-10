@@ -11,10 +11,10 @@ import PageLoading from "../../components/PageLoading";
 
 const storeIcon = new L.DivIcon({
   className: "",
-  html: `<div style="transform:translate(-11px,-11px);width:22px;height:22px;border-radius:6px;background:#1C1917;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
+  html: `<div style="transform:translate(-11px,-11px);width:22px;height:22px;border-radius:6px;background:#1F2933;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
   iconSize: [0, 0],
 });
-const PLAN_COLORS = ["#B0793D", "#4A6C8C", "#4B7A5E", "#8C4A7A", "#B0463D"];
+const PLAN_COLORS = ["#FF6B1A", "#1F2933", "#4A6C8C", "#4B7A5E", "#8C4A7A"];
 
 // O nome vem do perfil do motoboy: escapa antes de virar HTML do marcador.
 const escapeHtml = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -22,7 +22,7 @@ const escapeHtml = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&a
 const courierIcon = (label, active) => new L.DivIcon({
   className: "",
   html: `<div style="display:flex;align-items:center;gap:4px;transform:translate(-8px,-8px)">
-    <div style="flex-shrink:0;width:16px;height:16px;border-radius:50%;background:${active ? "#4F5BA6" : "#A8A29E"};border:3px solid #fff;box-shadow:0 0 6px rgba(0,0,0,.3)"></div>
+    <div style="flex-shrink:0;width:16px;height:16px;border-radius:50%;background:${active ? "#1F2933" : "#A8A29E"};border:3px solid #fff;box-shadow:0 0 6px rgba(0,0,0,.3)"></div>
     <div style="background:#fff;border:1px solid #E7E5E4;border-radius:8px;padding:1px 6px;font:700 11px sans-serif;white-space:nowrap">${escapeHtml(label)}</div>
   </div>`,
   iconSize: [0, 0],
@@ -30,7 +30,7 @@ const courierIcon = (label, active) => new L.DivIcon({
 
 const stopIcon = (n) => new L.DivIcon({
   className: "",
-  html: `<div style="width:20px;height:20px;border-radius:50%;background:#1C1917;color:#fff;font:700 11px sans-serif;display:flex;align-items:center;justify-content:center;transform:translate(-10px,-10px);border:2px solid #fff">${n}</div>`,
+  html: `<div style="width:20px;height:20px;border-radius:50%;background:#1F2933;color:#fff;font:700 11px sans-serif;display:flex;align-items:center;justify-content:center;transform:translate(-10px,-10px);border:2px solid #fff">${n}</div>`,
   iconSize: [0, 0],
 });
 
@@ -131,7 +131,7 @@ export function LiveMapTab() {
           ))}
           {store && <Marker position={[store.lat, store.lng]} icon={storeIcon}><Popup>Loja</Popup></Marker>}
           {Object.entries(trails).map(([runId, path]) => (
-            <Polyline key={runId} positions={path} pathOptions={{ color: "#4F5BA6", weight: 3, opacity: 0.6, dashArray: "4 6" }} />
+            <Polyline key={runId} positions={path} pathOptions={{ color: "#52606D", weight: 3, opacity: 0.6, dashArray: "4 6" }} />
           ))}
           {runs.flatMap((r) => (r.orders || []).filter((o) => o.lat && o.lng && o.status === "on_route").map((o) => (
             <Marker key={o.id} position={[o.lat, o.lng]} icon={stopIcon(o.stop_sequence)}>
@@ -155,7 +155,7 @@ export function LiveMapTab() {
           return (
             <Box key={c.id} sx={{ p: 1.2, mb: 1, border: "1px solid #E7E5E4", borderRadius: "12px", background: "#fff" }}>
               <Typography sx={{ fontWeight: 700, fontSize: 13.5 }}>{c.name}</Typography>
-              <Typography sx={{ fontSize: 12, color: run ? "#4F5BA6" : back ? "#7A5512" : "#A8A29E", fontWeight: 600 }}>
+              <Typography sx={{ fontSize: 12, color: run ? "#C2470A" : back ? "#7A5512" : "#A8A29E", fontWeight: 600 }}>
                 {run ? `Em rota · ${pending} parada(s) restante(s)` : back ? "Voltando para a loja" : `Livre${storePresence(c, store) ? ` · ${storePresence(c, store)}` : ""}`} · {timeAgo(c.last_location_at)}
               </Typography>
             </Box>

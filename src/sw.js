@@ -23,7 +23,7 @@ cleanupOutdatedCaches();
 // conseguir decodificar como JSON (não deveria acontecer, mas navegadores
 // variam), cai num texto genérico em vez de falhar silenciosamente.
 self.addEventListener("push", (event) => {
-  let data = { title: "ServiçoApp", message: "Você tem uma notificação nova." };
+  let data = { title: "GORAP", message: "Você tem uma notificação nova." };
   try {
     if (event.data) data = { ...data, ...event.data.json() };
   } catch {

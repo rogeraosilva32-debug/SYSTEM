@@ -36,9 +36,9 @@ export default defineConfig({
       devOptions: { enabled: false },
       includeAssets: ['favicon.svg', 'favicon.png'],
       manifest: {
-        name: 'ServiçoApp — Gestão de Equipes',
-        short_name: 'ServiçoApp',
-        description: 'Gestão de colaboradores, serviços e designações de atendimento.',
+        name: 'GORAP — Gestão de Entregas',
+        short_name: 'GORAP',
+        description: 'Gestão, organização, rotas, análise e precisão para entregas com motoboys.',
         lang: 'pt-BR',
         theme_color: '#FAFAF9',
         background_color: '#FAFAF9',

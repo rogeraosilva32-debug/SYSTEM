@@ -18,7 +18,7 @@ export const LOADER_CSS = `
 .bl-wrap.bl-inline{position:static;min-height:240px;background:transparent;z-index:auto}
 .bl-anim{position:relative;width:92px;height:92px}
 .bl-grid{position:absolute;left:50%;top:50%;width:0;height:0;transform:rotate(225deg)}
-.bl-box{position:absolute;left:-7.3px;top:-7.3px;width:14.6px;height:14.6px;box-sizing:border-box;border:1.6px solid #1C1917;border-radius:3px;background:#fff;will-change:transform;animation:1.617s linear var(--bl-d,0s) infinite}
+.bl-box{position:absolute;left:-7.3px;top:-7.3px;width:14.6px;height:14.6px;box-sizing:border-box;border:1.6px solid #1F2933;border-radius:3px;background:#fff;will-change:transform;animation:1.617s linear var(--bl-d,0s) infinite}
 .bl-text{font:600 13px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#A8A29E;letter-spacing:.02em}
 @keyframes bl-in{to{opacity:1}}
 .bl-b0{animation-name:bl-k0}.bl-b1{animation-name:bl-k1}.bl-b2{animation-name:bl-k2}.bl-b3{animation-name:bl-k3}.bl-b4{animation-name:bl-k4}.bl-b5{animation-name:bl-k5}.bl-b6{animation-name:bl-k6}

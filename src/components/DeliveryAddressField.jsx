@@ -12,7 +12,7 @@ const pinIcon = new L.DivIcon({
 });
 const storeIcon = new L.DivIcon({
   className: "",
-  html: `<div style="transform:translate(-11px,-11px);width:22px;height:22px;border-radius:6px;background:#1C1917;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
+  html: `<div style="transform:translate(-11px,-11px);width:22px;height:22px;border-radius:6px;background:#1F2933;color:#fff;font:700 12px sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff">L</div>`,
   iconSize: [0, 0],
 });
 

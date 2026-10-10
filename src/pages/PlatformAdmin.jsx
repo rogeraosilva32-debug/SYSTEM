@@ -174,7 +174,7 @@ function CompanyDetail({ company, onBack, onUpdated }) {
 
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 2, mb: 3 }}>
         <Box>
-          <Typography sx={{ fontWeight: 800, fontSize: 22, color: "#1C1917" }}>{company.name}</Typography>
+          <Typography sx={{ fontWeight: 800, fontSize: 22, color: "#1F2933" }}>{company.name}</Typography>
           <Chip
             label={company.status === "active" ? "Ativa" : "Suspensa"} size="small"
             sx={{
@@ -284,8 +284,8 @@ function CompanyDetail({ company, onBack, onUpdated }) {
         ].map((t) => (
           <Box key={t.key} onClick={() => setTab(t.key)} sx={{
             px: 2, py: 1.2, cursor: "pointer", fontSize: 13, fontWeight: 700,
-            color: tab === t.key ? "#1C1917" : "#A8A29E",
-            borderBottom: tab === t.key ? "2px solid #1C1917" : "2px solid transparent",
+            color: tab === t.key ? "#1F2933" : "#A8A29E",
+            borderBottom: tab === t.key ? "2px solid #1F2933" : "2px solid transparent",
           }}>
             {t.label}
           </Box>

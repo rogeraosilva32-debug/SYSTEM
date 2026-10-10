@@ -19,6 +19,7 @@ import { useAuth } from "../context/AuthContext";
 import NotificationBell from "./NotificationBell";
 import { SupportBanner, PlatformNotices } from "./PlatformBanners";
 import { markFirstPageShown } from "./PageLoading";
+import GorapLogo from "./GorapLogo";
 
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ === "undefined" ? "dev" : __APP_VERSION__;
@@ -66,9 +67,9 @@ function NavList({ items, current, onSelect, narrow, unread }) {
               display: "flex", alignItems: "center", gap: 1.5, width: "100%", border: 0, cursor: "pointer",
               font: "inherit", textAlign: "left", borderRadius: "10px",
               px: narrow ? 0 : 1.4, py: 1.05, justifyContent: narrow ? "center" : "flex-start",
-              background: active ? "#1C1917" : "transparent",
+              background: active ? "#1F2933" : "transparent",
               color: active ? "#fff" : "#57534E",
-              "&:hover": { background: active ? "#1C1917" : "#F0EFEE" },
+              "&:hover": { background: active ? "#1F2933" : "#F0EFEE" },
               "&:focus-visible": { outline: "2px solid #A8A29E" },
             }}
           >
@@ -178,12 +179,12 @@ export default function AppShell({ title, actions, children, nav }) {
         <Box component="img" src={brand.brand_logo_url} alt={brand.name}
           sx={{ height: 30, maxWidth: isNarrow ? 48 : 150, objectFit: "contain" }} />
       ) : (
-        <Box sx={{ width: 30, height: 30, borderRadius: "9px", background: "#1C1917", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 14, flexShrink: 0 }}>
-          {(brand?.name || (isPlatformAdmin ? "Plataforma" : title) || "S").charAt(0)}
-        </Box>
+        isPlatformAdmin && !isNarrow
+          ? <GorapLogo height={26} style={{ flexShrink: 0 }} />
+          : <GorapLogo variant="icon" height={30} style={{ flexShrink: 0, borderRadius: 9 }} />
       )}
-      {!isNarrow && !brand?.brand_logo_url && (
-        <Typography sx={{ fontWeight: 800, fontSize: 14, color: "#1C1917", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      {!isNarrow && !brand?.brand_logo_url && !isPlatformAdmin && (
+        <Typography sx={{ fontWeight: 800, fontSize: 14, color: "#1F2933", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {brand?.name || (isPlatformAdmin ? "Plataforma" : "Painel")}
         </Typography>
       )}
@@ -247,7 +248,7 @@ export default function AppShell({ title, actions, children, nav }) {
               <Box component="img" src={brand.brand_logo_url} alt={brand.name}
                 sx={{ height: { xs: 24, sm: 34 }, maxWidth: { xs: 72, sm: 140 }, objectFit: "contain", flexShrink: 0 }} />
             )}
-            <Typography sx={{ fontWeight: 800, fontSize: { xs: 16, sm: 18 }, color: "#1C1917", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+            <Typography sx={{ fontWeight: 800, fontSize: { xs: 16, sm: 18 }, color: "#1F2933", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
               {title}
             </Typography>
             {roleKey && (
@@ -267,7 +268,7 @@ export default function AppShell({ title, actions, children, nav }) {
             {actions}
             <NotificationBell />
             <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} size="small" aria-label="Conta">
-              <Avatar src={profile?.avatar_url} sx={{ width: 32, height: 32, fontSize: 13, background: "#292524" }}>
+              <Avatar src={profile?.avatar_url} sx={{ width: 32, height: 32, fontSize: 13, background: "#2B3642" }}>
                 {profile?.name?.charAt(0)}
               </Avatar>
             </IconButton>

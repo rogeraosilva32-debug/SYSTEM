@@ -47,11 +47,11 @@ export default class ErrorBoundary extends Component {
           <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 6 }}>Esta parte encontrou um erro</div>
           <div style={{ fontSize: 13, color: "#78716C", marginBottom: 14 }}>As outras abas continuam funcionando.</div>
           <button onClick={() => this.setState({ error: null })}
-            style={{ background: "#1C1917", color: "#fff", border: "none", borderRadius: 10, padding: "8px 18px", fontWeight: 700, cursor: "pointer", marginRight: 8 }}>
+            style={{ background: "#1F2933", color: "#fff", border: "none", borderRadius: 10, padding: "8px 18px", fontWeight: 700, cursor: "pointer", marginRight: 8 }}>
             Tentar de novo
           </button>
           <button onClick={this.handleReload}
-            style={{ background: "#fff", color: "#1C1917", border: "1px solid #D6D3D1", borderRadius: 10, padding: "8px 18px", fontWeight: 700, cursor: "pointer" }}>
+            style={{ background: "#fff", color: "#1F2933", border: "1px solid #D6D3D1", borderRadius: 10, padding: "8px 18px", fontWeight: 700, cursor: "pointer" }}>
             Recarregar
           </button>
         </div>

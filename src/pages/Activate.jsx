@@ -59,7 +59,7 @@ function ActivateForm({ refreshProfile, logout, navigate }) {
     <Box sx={{ minHeight: "100vh", background: "#FAFAF9", display: "flex", alignItems: "center" }}>
       <Container maxWidth="xs">
         <Box sx={{ background: "#fff", border: "1px solid #E7E5E4", borderRadius: "16px", p: 4 }}>
-          <Typography sx={{ fontWeight: 800, fontSize: 22, color: "#1C1917", mb: 0.5, letterSpacing: "-0.02em" }}>
+          <Typography sx={{ fontWeight: 800, fontSize: 22, color: "#1F2933", mb: 0.5, letterSpacing: "-0.02em" }}>
             Ativar acesso
           </Typography>
           <Typography sx={{ fontSize: 13.5, color: "#78716C", mb: 3 }}>

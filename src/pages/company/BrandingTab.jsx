@@ -79,13 +79,13 @@ function SlotCard({ slot, value, companyId, onSaved }) {
 export function BrandingTab() {
   const { companyId } = useAuth();
   const [company, setCompany] = useState(null);
-  const [color, setColor] = useState("#1C1917");
+  const [color, setColor] = useState("#1F2933");
   const [msg, setMsg] = useState(null);
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("companies").select("*").eq("id", companyId).maybeSingle();
     setCompany(data);
-    setColor(data?.brand_color || "#1C1917");
+    setColor(data?.brand_color || "#1F2933");
     refreshCompanySettings();
   }, [companyId]);
 

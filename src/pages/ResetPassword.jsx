@@ -83,10 +83,10 @@ export default function ResetPassword() {
             display: "flex", alignItems: "center", justifyContent: "center",
             background: "#F5F5F4", border: "1.5px solid #E7E5E4",
           }}>
-            <LockResetIcon sx={{ fontSize: 30, color: "#292524" }} />
+            <LockResetIcon sx={{ fontSize: 30, color: "#2B3642" }} />
           </Box>
 
-          <Typography sx={{ fontWeight: 800, fontSize: 19, color: "#1C1917", textAlign: "center", mb: 0.5 }}>
+          <Typography sx={{ fontWeight: 800, fontSize: 19, color: "#1F2933", textAlign: "center", mb: 0.5 }}>
             Nova senha
           </Typography>
 
@@ -118,7 +118,7 @@ export default function ResetPassword() {
             </>
           ) : !ready ? (
             <Box sx={{ display: "flex", justifyContent: "center", py: 3 }}>
-              <CircularProgress size={26} sx={{ color: "#292524" }} />
+              <CircularProgress size={26} sx={{ color: "#2B3642" }} />
             </Box>
           ) : done ? (
             <Typography sx={{ fontSize: 13, color: "#4B7A5E", textAlign: "center", fontWeight: 700, mb: 1 }}>

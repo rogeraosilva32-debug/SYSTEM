@@ -51,7 +51,7 @@ function TaskCard({ a, onOpen }) {
         <Chip label={STATUS_LABEL[a.status]} size="small" sx={{ height: 22, fontSize: 11, fontWeight: 700, background: color.bg, color: color.fg, flexShrink: 0 }} />
       </Box>
       <Box sx={{ display: "flex", gap: 2, mt: 1.5, pt: 1.5, borderTop: "1px solid #F5F5F4" }}>
-        <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: "#292524" }}>
+        <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: "#2B3642" }}>
           {new Date(a.scheduled_start).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
         </Typography>
         <Typography sx={{ fontSize: 12.5, color: "#78716C" }}>{a.duration_minutes} min</Typography>

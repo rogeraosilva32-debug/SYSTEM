@@ -30,7 +30,7 @@ export function SupportBanner() {
   return (
     <Box role="status" sx={{
       display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", px: { xs: 2, sm: 4 }, py: 1,
-      background: ok ? "#1C1917" : "#B0463D", color: "#fff",
+      background: ok ? "#1F2933" : "#B0463D", color: "#fff",
     }}>
       <VisibilityOutlinedIcon sx={{ fontSize: 18 }} />
       <Typography sx={{ fontSize: 13, fontWeight: 700, flex: 1, minWidth: 200 }}>
@@ -38,7 +38,7 @@ export function SupportBanner() {
           ? <>Modo suporte: vendo como <b>{support.name}</b>. Só leitura, nada pode ser alterado.</>
           : "O banco não ativou o modo suporte. Rode de novo o supabase-b2b-schema.sql no Supabase."}
       </Typography>
-      <Button size="small" onClick={exit} sx={{ color: "#1C1917", background: "#fff", fontWeight: 800, "&:hover": { background: "#F5F5F4" } }}>
+      <Button size="small" onClick={exit} sx={{ color: "#1F2933", background: "#fff", fontWeight: 800, "&:hover": { background: "#F5F5F4" } }}>
         Voltar para a plataforma
       </Button>
     </Box>

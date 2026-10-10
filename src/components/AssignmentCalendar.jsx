@@ -101,7 +101,7 @@ export default function AssignmentCalendar({ companyId, onOpen }) {
                 background: isToday ? "#FAFAF9" : "#fff",
                 borderColor: isToday ? "#D6D3D1" : "#E7E5E4",
               }}>
-                <Typography sx={{ fontSize: 11, fontWeight: 700, color: isToday ? "#1C1917" : "#A8A29E", mb: 0.6 }}>
+                <Typography sx={{ fontSize: 11, fontWeight: 700, color: isToday ? "#1F2933" : "#A8A29E", mb: 0.6 }}>
                   {DAY_LABELS[d.getDay()]} {d.getDate()}
                 </Typography>
                 {list.length === 0 ? (

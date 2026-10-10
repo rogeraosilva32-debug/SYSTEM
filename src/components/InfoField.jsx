@@ -10,7 +10,7 @@ export default function InfoField({ label, value, sx }) {
       <Typography sx={{ fontSize: 10.5, fontWeight: 700, color: "#8A8580", letterSpacing: "0.06em", textTransform: "uppercase", mb: 0.3 }}>
         {label}
       </Typography>
-      <Typography sx={{ fontSize: 14, fontWeight: 700, color: "#1C1917", letterSpacing: "-0.01em" }}>
+      <Typography sx={{ fontSize: 14, fontWeight: 700, color: "#1F2933", letterSpacing: "-0.01em" }}>
         {value}
       </Typography>
     </Box>

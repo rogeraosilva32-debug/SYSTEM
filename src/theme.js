@@ -1,8 +1,8 @@
 import { createTheme } from "@mui/material/styles";
 
-// Paleta neutra, inspirada em painéis SaaS modernos: quase monocromática
-// (grafite sobre branco/cinza-quente), com cor reservada só pra estados
-// semânticos (sucesso/aviso/erro), nunca pra decoração. Bordas finas em vez
+// Identidade GORAP: laranja (#FF6B1A) nos botões principais e destaques,
+// grafite (#1F2933) nos textos e off-white (#FAFAF9) no fundo. Fora isso a
+// paleta segue neutra, com cor só pra estados semânticos (sucesso/aviso/erro). Bordas finas em vez
 // de sombras pesadas; cantos levemente arredondados; tipografia como
 // principal ferramenta de hierarquia (peso e espaçamento, não cor).
 const neutral = {
@@ -15,9 +15,11 @@ const neutral = {
   500: "#78716C",
   600: "#57534E",
   700: "#44403C",
-  800: "#292524",
-  900: "#1C1917",
+  800: "#2B3642",
+  900: "#1F2933",
 };
+
+export const BRAND = { orange: "#FF6B1A", orangeDark: "#E5560A", graphite: "#1F2933" };
 
 const theme = createTheme({
   palette: {
@@ -32,9 +34,9 @@ const theme = createTheme({
     },
     divider: neutral[200],
     primary: {
-      main: neutral[800],
-      light: neutral[600],
-      dark: neutral[900],
+      main: BRAND.orange,
+      light: "#FF8A47",
+      dark: BRAND.orangeDark,
       contrastText: "#FFFFFF",
     },
     secondary: {
@@ -82,7 +84,7 @@ const theme = createTheme({
           fontWeight: 600,
         },
         containedPrimary: {
-          "&:hover": { backgroundColor: neutral[900] },
+          "&:hover": { backgroundColor: BRAND.orangeDark },
         },
         outlined: {
           borderColor: neutral[300],
@@ -130,7 +132,7 @@ const theme = createTheme({
     },
     MuiTabs: {
       styleOverrides: {
-        indicator: { backgroundColor: neutral[800], height: 2 },
+        indicator: { backgroundColor: BRAND.orange, height: 2 },
       },
     },
     MuiTab: {

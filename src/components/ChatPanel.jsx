@@ -218,8 +218,8 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
                 )}
                 <Box sx={{
                   maxWidth: "78%", px: 1.6, py: 1, borderRadius: "14px",
-                  background: mine ? "#1C1917" : "#F5F5F4",
-                  color: mine ? "#fff" : "#1C1917",
+                  background: mine ? "#1F2933" : "#F5F5F4",
+                  color: mine ? "#fff" : "#1F2933",
                   fontSize: 13.5, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word",
                 }}>
                   {m.text}
@@ -258,7 +258,7 @@ export default function ChatPanel({ collaboratorId, companyId, roomLabel }) {
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
           multiline maxRows={4}
         />
-        <IconButton onClick={handleSend} disabled={!input.trim() || sending || !roomKey || loadError} sx={{ color: "#1C1917" }}>
+        <IconButton onClick={handleSend} disabled={!input.trim() || sending || !roomKey || loadError} sx={{ color: "#1F2933" }}>
           <SendIcon sx={{ fontSize: 20 }} />
         </IconButton>
       </Box>
